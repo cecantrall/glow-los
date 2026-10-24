@@ -1,0 +1,16 @@
+name: glow-los
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - numpy>=1.26
+  - scipy>=1.11
+  - netcdf4>=1.7.2
+  - gfortran
+  - c-compiler
+  - netcdf-fortran
+  - meson>=1.8.2
+  - ninja>=1.11
+  - matplotlib>=3.8
+  - pytest>=8

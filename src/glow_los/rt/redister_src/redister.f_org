@@ -1,0 +1,3235 @@
+C********1*********2*********3*********4*********5*********6*********7**
+      PROGRAM REDISTER
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C THIS PROGRAM USES THE FEAUTRIER METHOD TO SOLVE THE RADIATIVE
+C TRANSFER EQUATION FOR RESONANCE MULTIPLET EMISSIONS IN PLANETARY
+C ATMOSPHERES. THE CODE CAN HANDLE INTERNAL SOURCES (E.G., PHOTOELECTRON
+C IMPACT EXCITATION) OR EXTERNAL SOURCES (E.G., SOLAR RESONANCE
+C SCATTERING), AND ACCOUNTS FOR TEMPERATURE VARIATIONS AND INHOMOGENEITY
+C IN THE ATMOSPHERE. THREE APPROXIMATIONS TO THE FREQUENCY
+C REDISTRIBUTION ARE AVAILABLE, ANGLE-AVERAGED PARTIAL REDISTRIBUTION
+C (AAPR), VOIGT COMPLETE REDISTRIBUTION (VCR), AND MONOCHROMATIC
+C SCATTERING (MS).
+C
+C FOR INPUT, THE PROGRAM REQUIRES A MODEL ATMOSPHERE WITH TEMPERATURE,
+C SCATTERER DENSITY, AND ABSORBER DENSITY (UP TO THREE ABSORBER GASES
+C ARE ALLOWED), AS A FUNCTION OF ALTITUDE. THE MODEL ATMOSPHERE IS
+C GENERALLY READ IN FROM THE FILE `redister.atm'. IF DESIRED, THE
+C PROGRAM CAN GENERATE AN ISOTHERMAL ATMOSPHERE OR CONSTANT DENSITY
+C SLAB FOR TESTING PURPOSES. IF AN INTERNAL SOURCE IS BEING RUN, THE
+C PROGRAM WILL GENERALLY READ THE INITIAL SOURCE FUNCTION (I.E., INITIAL
+C VOLUME EMISSION RATE) FROM THE FILE `redister.pro'. IF DESIRED, THE
+C PROGRAM CAN GENERATE A CHAPMAN PROFILE FOR THE INTERNAL INITIAL
+C SOURCE FUNCTION. THE OTHER REQUIRED INPUT FILE, `redister.inp',
+C CONTAINS ALL THE FLAGS, OPTICAL PARAMETERS, ETC., THAT THE PROGRAM
+C NEEDS IN ORDER TO SUCCESSFULLY RUN.
+C
+C FOR OUTPUT, THE PROGRAM WRITES A LARGE FILE WITH MOST OF THE RESULTS
+C (E.G., THE MODEL ATMOSPHERE, OPTICAL DEPTHS, INITIAL AND FINAL
+C SOURCE FUNCTIONS, INTENSITIES, ETC.) CALLED `redister.out'. A
+C SMALLER FILE CONTAINING THE WAVELENGTH-INTEGRATED SOURCE FUNCTIONS
+C AND INTENSITIES IS WRITTEN TO `redister.str', AND IS CONVENIENT FOR
+C FURTHER PROCESSING BY PLOTTING PROGRAMS. ANOTHER FILE, `redister.sor',
+C STORES THE INITIAL AND FINAL SOURCE FUNCTIONS IN BINARY FORM,
+C THAT INTENSITIES MAY BE CALCULATED SEPARATELY FOR OTHER DIRECTIONS
+C OR ALTITUDES WITHOUT RECALCULATING THE SOURCE FUNCTION.
+C
+C RANDY GLADSTONE 6/27/91
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /SCAN/ XAS(72,5,25),RA(600,5),ANGS(400),ZANGS(5),
+     &              NANGS,NZANGS
+      COMMON /FORM/ XIS(72,99,25),ANG(400),FOV(25),
+     &              WFOV(25),RD(9,99),FIELD,THETA,R0,
+     &              NFOV,NATM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /OUT/ XNS(99),XNSR(99),XNA(99,4),TEMP(99),TEMPS(99),SS(99),
+     &             TEMP0,GAM(3),EVAL(3),OSC(3),GVAL(3),CABS(3,4),EV(72),
+     &             FV(72),GV(72),CA(72,4),EE1(3),FLINE(3),XDIS(3),
+     &             XOFF(3),WS(3),FINU(400),A0,CS0,SST,NABS
+      COMMON /INTENS/ SF(72,99),SI(72,99),SA(3,99)
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      DIMENSION AU(72),WU(72),SUMB(99),XXX(400),YYY(400),EVL(3),GVL(3)
+      DIMENSION ZQ(400),ZQ1(400),TEMPQ(400),XNSQ(400),XNSRQ(400),
+     &          XNAQ(400,4),SSQ(400),TEMPSQ(400),COL(400),
+     &          HA(4),RADU(400),EMA(400),TEMPQQ(400),ELQ(400),DOP(400)
+      DIMENSION COLS(400),CSRC(400),TSCALE(400)
+
+C********1*********2*********3*********4*********5*********6*********7**
+C TIME THE MAJOR SUBROUTINES OF THE PROGRAM (`OUTPUT', `COEFF', `SOLVE',
+C `FORMAL', AND POSSIBLY `ANGLE').
+C********1*********2*********3*********4*********5*********6*********7**
+      REAL*4 TIME(2)
+      TIM1 = DTIME(TIME)
+      PRINT *,' MAIN PROGRAM BEGIN, USER = ', TIME(1),
+     &        ', SYSTEM = ', TIME(2), ', TOTAL = ', TIME(1) + TIME(2)
+
+C********1*********2*********3*********4*********5*********6*********7**
+C OPEN ALL THE REQUIRED FILES.
+C********1*********2*********3*********4*********5*********6*********7**
+      OPEN(UNIT=14,STATUS='UNKNOWN',FILE='redister.inp')
+      OPEN(UNIT=15,STATUS='UNKNOWN',FILE='redister.out')
+      OPEN(UNIT=16,STATUS='UNKNOWN',FILE='redister.atm')
+      OPEN(UNIT=18,STATUS='UNKNOWN',FILE='redister.pro')
+      OPEN(UNIT=19,STATUS='UNKNOWN',FILE='redister.str')
+      OPEN(UNIT=20,STATUS='UNKNOWN',FILE='redister.sor',
+     &     FORM='UNFORMATTED')
+      OPEN(UNIT=24,STATUS='UNKNOWN',FILE='redister.ion')
+      PI = 3.1415926535897932385D0
+      SQPI = 1.7724538509055160273D0
+      MAXNL = 99
+      MAXM = 72
+      MAXQ = 400
+      MAXA = 4
+C********1*********2*********3*********4*********5*********6*********7**
+C SOME ARRAY DIMENSIONS PROGRAM FLAGS ARE READ IN FROM `redister.inp'
+C
+C NLI = THE # OF ALTITUDE LEVELS IN THE `redister.atm' FILE
+C NLIS = THE # OF ALTITUDE LEVELS IN THE `redister.pro' FILE
+C NL = THE # OF ALTITUDE LEVELS TO USE IN THE RUN (MAX = 99) 
+C MU = THE # OF ZENITH ANGLES PER HEMISPHERE (E.G., MU = 1 => 2-STREAM)
+C MX = THE # OF WAVELENGTHS FROM LINE CENTER TO THE FAR WINGS
+C NLINE = THE # OF *COUPLED* LINES IN THE MULTIPLET
+C NLN = THE # OF SUB-LEVELS IN THE GROUND STATE
+C NTIME = ONLY PRINT EVERY NTIMEth LEVEL IN THE `redister.out' FILE
+C KIND = THE TYPE OF FREQUENCY REDISTRIBUTION DESIRED (1 => AAPR,
+C        2 => VCR, 3 => MS)
+C ISOR = 0 => CALCULATE SOURCE FUNCTIONS
+C ISOR = 1 => READ SOURCE FUNCTIONS FROM `redister.sor' FILE
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) NLI,NLIS,NL,MU,MX,NLINE,NLN,NTIME,KIND,ISOR
+C********1*********2*********3*********4*********5*********6*********7**
+C THE ALTITUDE GRID USED BY THE PROGRAM ALLOWS FOR NLB (OUT OF THE
+C TOTAL NL LEVELS) TO BE EQUALLY SPACED DZL (MEASURED IN cm) APART AT
+C THE BOTTOM OF THE ATMOSPHERE
+C
+C TFACT > 0 => SCALE THE ATMOSPHERIC AND INTERNAL SOURCE (IF ANY)
+C              TEMPERATURES BY TFACT
+C TFACT < 0 => LEAVE THE ATMOSPHERIC TEMPERATURES ALONE, BUT SET THE
+C              INTERNAL SOURCE TEMPERATURE TO ABS(TFACT) * TEMP0
+C              (USEFUL IN CASES OF DISSOCIATIVE EXCITATION)
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) NLB,DZL,TFACT
+      NL1 = NL - 1
+      ITMX = 2 * MX - 1
+      ML = MX * NLINE
+      M = MU * ML
+      MUL = MU * NLINE
+C********1*********2*********3*********4*********5*********6*********7**
+C TEMP0 = REFERENCE TEMPERATURE FOR TEMPERATURE-DEPENDENT PARAMETERS
+C         (E.G., SCATTERING CROSS SECTION, VOIGT PARAMETER, DOPPLER
+C          WIDTHS).
+C XMID = WAVELENGTH TO SWITCH FROM EVEN SPACING (LINE CORE) TO
+C        LOGARITHMIC SPACING (LINE WINGS), MEASURED IN STANDARD
+C        DOPPLER UNITS (sdu)
+C XMAX = MAXIMUM WAVELENGTH TO WORRY ABOUT, MEASURED IN sdu
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) TEMP0,XMID,XMAX
+C********1*********2*********3*********4*********5*********6*********7**
+C A0 = VOIGT PARAMETER, AT THE REFERENCE TEMPERATURE (DIMENSIONLESS)
+C CS0 = LINE CENTER SCATTERING CROSS SECTION, *DIVIDED BY THE
+C       OSCILLATOR STRENGTH*, AT THE REFERENCE TEMPERATURE, MEASURED
+C       IN cm^2
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) A0,CS0
+C********1*********2*********3*********4*********5*********6*********7**
+C IXS = 0 => INTERNAL SOURCE, READ FROM `redister.pro'
+C IXS = 1 => EXTERNAL SOURCE
+C IXS = 2 => INTERNAL SOURCE, CHAPMAN PROFILE
+C IXS = 3 => INTERNAL SOURCE, NIGHTGLOW
+C NA = 1 => A CALL WILL BE MADE TO THE `ANGLE' ROUTINE, TO CALCULATE
+C           ZENITH ANGLE SCANS
+C NATM = -2 => READ IN ATMOSPHERE FROM `redister.atm' FILE AND
+C              IONOSPHERE FROM 'redister.ion' FILE (FOR NIGHTGLOW)
+C NATM = -1 => READ IN ATMOSPHERE FROM `redister.atm' FILE AND
+C              IONOSPHERE FROM 'redister.ion' FILE (FOR 834)
+C NATM = 0 => READ IN ATMOSPHERE FROM `redister.atm' FILE
+C NATM = 1 => ISOTHERMAL ATMOSPHERE, CALCULATED BY PROGRAM
+C NATM = 2 => ISOTHERMAL, CONSTANT DENSITY SLAB
+C NABS = THE # OF ABSORBER GASES (MAX = 4)
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) IXS,NA,NATM,NABS
+      IF(NATM .EQ. -6) READ (14,*) FNE
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW READ IN SOME OPTICAL PARAMETERS FOR EACH LINE OF THE MULTIPLET
+C
+C GAM = EINSTEIN TRANSITION PROBABILITY, MEASURED IN s^-1
+C EVAL = ENERGY LEVEL OF THE GROUND STATE SUB-LEVEL, MEASURED in cm^-1
+C OSC = OSCILLATOR STRENGTH OF TRANSITION
+C GVAL = STATISTICAL WEIGHT OF GROUND STATE SUB-LEVEL
+C EE1 = RAYLEIGH FRACTION OF PHASE FUNCTION (SEE CHANDRASEKHAR, P. 52)
+C CABS = ABSORPTION CROSS SECTIONS FOR EACH ABSORBER, MEASURED IN cm^2
+C WS = SINGLE-SCATTERING ALBEDO FOR THE TRANSITION (I.E., THE FRACTION
+C      OF PHOTONS THAT DECAY FROM THE UPPER STATE BACK DOWN TO THE
+C      GROUND STATE, RATHER THAN BRANCHING TO SOME INTERMEDIATE STATE)
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) (GAM(L),EVAL(L),OSC(L),GVAL(L),EE1(L),
+     &            (CABS(L,IA), IA = 1,NABS),WS(L), L = 1,NLINE)
+C********1*********2*********3*********4*********5*********6*********7**
+C READ IN ENERGIES AND WEIGHTS OF ALL GROUND STATE SUB-LEVELS, IN ORDER
+C TO CALCULATE THE BOLTZMANN DISTRIBUTION POPULATION OF THE SUB-LEVELS
+C
+C EVL = ENERGY LEVEL OF ALL GROUND STATE SUB-LEVELS, MEASURED in cm^-1
+C GVL = STATISTICAL WEIGHT OF ALL GROUND STATE SUB-LEVELS
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) (EVL(L),GVL(L), L = 1,NLN)
+      IF(IXS .EQ. 0) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERNAL SOURCE, READ FROM `redister.pro'
+C
+C NSUN = THE # OF DIFFERENT RUNS TO DO FOR THE SAME MODEL ATMOSPHERE
+C        (A DIFFERENT INTERNAL SOURCE MUST BE READ IN FOR EACH VALUE
+C        OF NSUN)
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (14,*) NSUN
+      ELSE IF(IXS .EQ. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C EXTERNAL SOURCE
+C
+C NSUN = THE # OF DIFFERENT RUNS TO DO FOR THE SAME MODEL ATMOSPHERE
+C        (A DIFFERENT INTERNAL SOURCE MUST BE READ IN FOR EACH VALUE
+C        OF NSUN)
+C ISUN = 0 => USE EXP(-TAU / USUN) TO CALCULATE SOLAR FLUX ATTENUATION
+C ISUN = 1 => CALL ROUTINE `TAUSUN' TO CALCULATE OPTICAL DEPTH ALONG
+C             LINE-OF-SIGHT TO SUN AND ESTIMATE SOLAR FLUX ATTENUATION
+C             MORE CAREFULLY
+C FLINE = SOLAR FLUX, MEASURED IN ph cm^-2 s^-1 AT TOP OF THE PLANET'S
+C         ATMOSPHERE
+C THE SHAPE OF THE SOLAR LINE IS APPROXIMATED BY THE SUM OF EQUAL AND
+C OFFSET GAUSSIANS, WITH DISPERSIONS XDIS AND OFFSETS FROM LINE CENTER
+C OF +/- XOFF, BOTH MEASURED IN sdu 
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (14,*) NSUN,ISUN
+        READ (14,*) (FLINE(L),XDIS(L),XOFF(L), L = 1,NLINE)
+      ELSE IF(IXS .EQ. 2) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERNAL SOURCE, CALCULATED BY PROGRAM
+C
+C NSUN = THE # OF DIFFERENT RUNS TO DO FOR THE SAME MODEL ATMOSPHERE
+C        (A DIFFERENT INTERNAL SOURCE MUST BE READ IN FOR EACH VALUE
+C        OF NSUN)
+C COLS = TOTAL COLUMN DENSITY OF ATMOSPHERE AT LEVEL OF PEAK EMISSION,
+C        MEASURED IN cm^-2
+C CSRC = COLUMN PRODUCTION RATE, MEASURED IN ph cm^-2 s^-1
+C TSCALE = SCALE FACTOR APPLIED TO THE SOURCE TEMPERATURE, SIMILAR
+C          TO TFACT, BUT COULD BE DIFFERENT HERE FOR EACH VALUE OF NSUN
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (14,*) NSUN
+        DO IU = 1,NSUN 
+           READ (14,*) COLS(IU),CSRC(IU),TSCALE(IU)
+        END DO
+      ELSE IF(IXS .EQ. 3) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C NIGHTGLOW, CALCULATE INITIAL PRODUCTION RATES FROM IRI MODEL
+C ATMOSPHERE WITH RATE(I) = EDENS(I)^2 * COEFF, WHERE COEFF IS
+C NOW THE RECOMBINATION REACTION RATE - TFACT * SQRT(1160/TEMP) -
+C WHERE TFACT = 2.8E-13, 6.0E-13, AND 4.0E-13 FOR 1304, 1356, AND 911,
+C RESPECTIVELY
+C
+C NSUN = THE # OF DIFFERENT RUNS TO DO FOR THE SAME MODEL ATMOSPHERE
+C        (A DIFFERENT INTERNAL SOURCE MUST BE READ IN FOR EACH VALUE
+C        OF NSUN)
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (14,*) NSUN
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C USUN = SOLAR ZENITH ANGLE AT BOTTOM OF ATMOSPHERE
+C RADU > 0 => RADU IS THE POSITION OF THE OBSERVED POINT ON THE PLANET,
+C             MEASURED IN PLANET RADII (USED TO CALCULATE EMISSION
+C             ANGLE FOR OBSERVATIONS OF PLANET FROM INFINITELY FAR AWAY)
+C RADU < 0 => EMA IS USED FOR THE EMISSION ANGLE
+C EMA = EMISSION ANGLE FOR INTENSITY CALCULATION (IF RADU < 0),
+C       MEASURED IN degrees (E.G., NADIR VIEWING => EMA = 180)
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) (USUN(IU), IU = 1,NSUN)
+      READ (14,*) (RADU(IU), IU = 1,NSUN)
+      READ (14,*) (EMA(IU), IU = 1,NSUN)
+      IF(IXS .EQ. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE INCIDENT SOLAR FLUX
+C********1*********2*********3*********4*********5*********6*********7**
+        DO IU = 1,NSUN
+           FIN = 0.0D0
+           USUN(IU) = COSD(USUN(IU))
+           DO L = 1,NLINE
+              FIN = FIN + FLINE(L) * USUN(IU)
+           END DO
+           FINU(IU) = FIN
+        END DO
+      END IF
+      IF(NATM .EQ. -8) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -8, DO ESTIMATE FOR HEI LINES ON VENUS
+C********1*********2*********3*********4*********5*********6*********7**
+c       READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNAQ(I,1),
+c     &              XNAQ(I,2),XNAQ(I,3),XNAQ(I,4), I = 1,NLI)
+       READ (16,*) (ZQ(I),TEMPQ(I),XNAQ(I,1),XNAQ(I,3),XNAQ(I,4),
+     &              XNAQ(I,2),XNSRQ(I),XNSQ(I), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNSQ(I) + XNAQ(I,1) + XNAQ(I,2) + XNAQ(I,3) +
+     &                 XNAQ(I,4) + XNSRQ(I)
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. -7) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -7, DO ESTIMATE FOR OII LINES ON VENUS
+C********1*********2*********3*********4*********5*********6*********7**
+       READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNAQ(I,1),
+     &              XNAQ(I,2),XNAQ(I,3),XNAQ(I,4), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        OPX = 6.0D4
+        ZX = 185.0D0
+        HX = 90.0D0
+        DO I = 1,NLI
+           XNSRQ(I) = XNSQ(I) + XNAQ(I,1) + XNAQ(I,2) + XNAQ(I,3) +
+     &                XNAQ(I,4)
+           XNSQ(I) = OPX * EXP(-(ZQ(I)-ZX)/HX) * EXP(1.0D0 -
+     &               EXP(-(ZQ(I)-ZX)/HX*1.0D1))
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. -6) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -6, DO ESTIMATE FOR NEI 629A LINE
+C********1*********2*********3*********4*********5*********6*********7**
+       READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNAQ(I,1),
+     &              COL(I),XNSRQ(I), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSQ(I) = XNAQ(I,1) * FNE
+            XNSRQ(I) = XNSQ(I) + XNAQ(I,1) + COL(I) + XNSRQ(I)
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. -5) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -5, READ IN REGO MODEL JUPITER ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+       READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNAQ(I,1),
+     &              XNAQ(I,2),XNAQ(I,3), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNSQ(I) + XNAQ(I,1) + XNAQ(I,2) + XNAQ(I,3)
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. -4) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -4, READ IN MODEL JUPITER 584 ATMOSPHERE FROM `redister.atm'
+C********1*********2*********3*********4*********5*********6*********7**
+       READ (16,*) (ZQ(I),TEMPQ(I),XNAQ(I,1),XNAQ(I,2),
+     &              COL(I),XNSQ(I), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNAQ(I,2) + XNSQ(I) + XNAQ(I,1) + COL(I)
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. -3) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -3, READ IN MODEL JUPITER LYA ATMOSPHERE FROM `redister.atm'
+C********1*********2*********3*********4*********5*********6*********7**
+       READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNSRQ(I),
+     &              XNAQ(I,1),COL(I), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNSRQ(I) + XNSQ(I) + XNAQ(I,1) + COL(I)
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. -2) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -2, READ IN MODEL ATMOSPHERE FROM `redister.atm'
+C and `redister.ion'
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNSRQ(I),
+     &               XNAQ(I,1),COL(I),CSRC(I), I = 1,NLI)
+        READ (24,*) (ZQI,ELQ(I),DOP(I),DHP,DHEP,DO2P,DNOP,
+     &               TNI,TEMPQQ(I),TEI, I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNSRQ(I) + XNSQ(I) + XNAQ(I,1) + COL(I) +
+     &                 CSRC(I)
+        END DO
+      ELSE IF(NATM .EQ. -1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = -1, READ IN MODEL ATMOSPHERE FROM `redister.atm'
+C and `redister.ion'
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (16,*) (ZQ(I),TEMPQ(I),XNAQ(I,3),XNAQ(I,2),
+     &               XNAQ(I,1),COL(I),XNSRQ(I), I = 1,NLI)
+        READ (24,*) (ZQI,ELQ(I),XNSQ(I),DHP,DHEP,DO2P,DNOP,
+     &               TNI,TEMPQQ(I),TEI, I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SET ION TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNSRQ(I) + XNAQ(I,1) + XNAQ(I,2) + 
+     &                 XNAQ(I,3) + COL(I)
+           IF(TEMPQQ(I) .GT. 0.0D0) TEMPQ(I) = TEMPQQ(I)
+        END DO
+      ELSE IF(NATM .EQ. 0) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = 0, READ IN MODEL ATMOSPHERE FROM `redister.atm'
+C********1*********2*********3*********4*********5*********6*********7**
+       READ (16,*) (ZQ(I),TEMPQ(I),XNSQ(I),XNSRQ(I),
+     &              XNAQ(I,1),COL(I),CSRC(I), I = 1,NLI)
+C********1*********2*********3*********4*********5*********6*********7**
+C COMPUTE TOTAL ATMOSPHERIC DENSITY AND SCALE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NLI
+            XNSRQ(I) = XNSRQ(I) + XNSQ(I) + XNAQ(I,1) + COL(I) +
+     &                 CSRC(I)
+           IF(TFACT .GT. 0.0D0) THEN
+             TEMPQ(I) = TEMPQ(I) * TFACT
+           END IF
+        END DO
+      ELSE IF(NATM .EQ. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = 1, CREATE ISOTHERMAL ATMOSPHERE
+C
+C TEMPA = ATMOSPHERIC TEMPERATURE, MEASURED IN K
+C TSMAX = MAXIMUM SCATTERER OPTICAL DEPTH
+C TSMIN = MINIMUM SCATTERER OPTICAL DEPTH
+C HS = SCATTERER SCALE HEIGHT, MEASURED IN km
+C TAMAX = MAXIMUM ABSORBER OPTICAL DEPTH
+C HAB = ABSORBER SCALE HEIGHT, MEASURED IN km
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (14,*) TEMPA,TSMAX,TSMIN,HS,TAMAX,HAB
+        XNSQ0 = TSMAX / (HS * 1.0D5 * CS0 * OSC(1) * SQRT(TEMP0 /TEMPA))
+        XNAQ0 = TAMAX / (HAB * 1.0D5 * CABS(1,1))
+        DLZ = HS * LOG(TSMAX / TSMIN) / DFLOAT(NLI - 1)
+        DO I = 1,NLI
+           ZQ(I) = 1.0D2 + DFLOAT(I - 1) * DLZ
+           TEMPQ(I) = TEMPA
+           XNSQ(I) = XNSQ0 * EXP((1.0D2 - ZQ(I)) / HS)
+           XNAQ(I,1) = XNAQ0 * EXP((1.0D2 - ZQ(I)) / HAB)
+        END DO
+      ELSE IF(NATM .EQ. 2) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NATM = 2, CREATE ISOTHERMAL, CONSTANT DENSITY SLAB
+C
+C TEMPA = ATMOSPHERIC TEMPERATURE, MEASURED IN K
+C TSMAX = SCATTERER OPTICAL DEPTH
+C TAMAX = ABSORBER OPTICAL DEPTH
+C ZMIN = BOTTOM OF ATMOSPHERE, MEASURED IN km
+C ZMAX = TOP OF ATMOSPHERE, MEASURED IN km
+C********1*********2*********3*********4*********5*********6*********7**
+        READ (14,*) TEMPA,TSMAX,TAMAX,ZMIN,ZMAX
+        DELZ = ZMAX - ZMIN
+        XNSQ0 = TSMAX / (DELZ * 1.0D5 * CS0 * OSC(1) *
+     &          SQRT(TEMP0 / TEMPA))
+        XNAQ0 = TAMAX / (DELZ * 1.0D5 * CABS(1,1))
+        DLZ =  DELZ / DFLOAT(NLI - 1)
+        DO I = 1,NLI
+           ZQ(I) = ZMIN + DFLOAT(I - 1) * DLZ
+           TEMPQ(I) = TEMPA
+           XNSQ(I) = XNSQ0
+           XNAQ(I,1) = XNAQ0
+        END DO
+        ZQ(NLI) = ZMAX
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CONVERT ALTITUDE, READ IN IN km, TO cm
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 1,NLI
+         ZQ(I) = ZQ(I) * 1.0D5
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C SET UP NEW ALTITUDE GRID FOR RUN, HOPEFULLY WITH MORE LEVELS
+C IN OPTICAL DEPTH NEAR BOUNDARIES
+C
+C EXPONENTIAL ATMOSPHERES
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(NATM .LT. 2) THEN
+        NLT = NL - NLB
+        Z(1) = ZQ(1)
+        DO I = 2,NLB
+           Z(I) = Z(I - 1) + DZL
+        END DO
+        DELZ = 2.0D0 * (ZQ(NLI) - Z(NLB) - DFLOAT(NLT) * DZL) /
+     &         DFLOAT(NLT) / DFLOAT(NLT - 1)
+        DO I = 1,NLT
+           J = I + NLB
+           Z(J) = Z(J - 1) + DZL + DFLOAT(I - 1) * DELZ
+        END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CONSTANT DENSITY ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+      ELSE
+        N2 = NL1 / 2
+        ZMAX1 = (ZMAX + ZMIN) / 2.0D0
+        ZM = LOG(ZMAX1)
+        DZMIN = LOG((ZMAX - ZMIN) / NL / 1.0D2)
+        STEP = (ZM - DZMIN) / N2
+        Z(1) = ZMIN
+        Z(N2 + 1) = ZMAX1
+        Z(NL) = ZMAX
+        DO I = 2,N2
+           Z(I) = EXP(STEP * (I - 1) + DZMIN)
+           Z(NL + 1 - I) = ZMAX + ZMIN - Z(I)
+        END DO
+        DO I = 1,NL
+           Z(I) = Z(I) * 1.0D5
+        END DO
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERPOLATE DENSITIES AND TEMPERATURES ONTO NEW GRID
+C********1*********2*********3*********4*********5*********6*********7**
+      CALL INTERP(ZQ,TEMPQ,NLI,Z,TEMP,NL)
+      CALL REVORD(TEMP,NL)
+      CALL INTERPL(ZQ,XNSQ,NLI,Z,XNS,NL)
+      CALL REVORD(XNS,NL)
+      IF(NATM .LE. 0) THEN
+        CALL INTERPL(ZQ,XNSRQ,NLI,Z,XNSR,NL)
+        CALL REVORD(XNSR,NL)
+      END IF
+      CALL INTERPLA(ZQ,XNAQ,NLI,Z,XNA,NL,NABS,MAXNL,MAXQ,MAXA)
+      CALL REVORDA(XNA,NL,NABS,MAXNL,MAXA)
+      CALL REVORD(Z,NL)
+C********1*********2*********3*********4*********5*********6*********7**
+C R0 = PLANET RADIUS, MEASURED IN cm
+C THETA = SOLAR PHASE ANGLE, MEASURED IN degrees (FOR REMOTE
+C         OBSERVATIONS)
+C FIELD = FIELD OF VIEW (RANGE IN ZENITH ANGLE), MEASURED IN degrees
+C NFOV = THE # OF LINES-OF-SIGHT TO USE IN AVERAGING OVER THE FIELD
+C        OF VIEW (THEY ARE EVENLY SPACED, WITH A POINT AT THE CENTER,
+C        SO USE AN ODD NUMBER)
+C NFOV > 0 => EVEN SPACING
+C NFOV < 0 => READ IN WEIGHTS
+C********1*********2*********3*********4*********5*********6*********7**
+      READ (14,*) R0,THETA
+      READ (14,*) FIELD,NFOV
+C********1*********2*********3*********4*********5*********6*********7**
+C SET UP WEIGHTS AND PIVOTS FOR FIELD OF VIEW AVERAGING
+C********1*********2*********3*********4*********5*********6*********7**
+      WFOV0 = 1.0D0 / ABS(DFLOAT(NFOV))
+      IF(NFOV .GT. 0) THEN
+        DO IFOV = 1,NFOV
+           WFOV(IFOV) = WFOV0
+        END DO
+      ELSE
+        NFOV = ABS(NFOV)
+        READ (14,*) (WFOV(IFOV), IFOV = 1,NFOV)
+      END IF
+      DO IFOV = 1,NFOV
+         FOV(IFOV) = -FIELD / 2.0D0 * (1.0D0 + WFOV0) +
+     &               DFLOAT(IFOV) * FIELD * WFOV0
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE EMISSION ANGLES, IF VIEWING THE PLANET REMOTELY, OR
+C SET THEM EQUAL TO EMA, IF INSIDE THE ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+      FPL = Z(1) / R0 + 1.0D0
+      DO IU = 1,NSUN
+         IF(RADU(IU) .GT. 1.0D0) THEN
+           ANG(IU) = 180.0D0 - ASIND(RADU(IU) / FPL)
+         ELSE IF(RADU(IU) .LT. 0.0D0) THEN
+           ANG(IU) = EMA(IU)
+         ELSE
+           ANG(IU) = 180.0D0 - ASIND(SIND(EMA(IU)) / FPL) 
+         END IF
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NA > 0, SET UP FOR ZENITH ANGLE SCAN CALCULATION
+C
+C NANGS = THE # OF ZENITH ANGLES TO CALCULATE THE INTENSITY FOR
+C         (E.G., 181)
+C NZANGS = THE # OF ALTITUDES TO CALCULATE A ZENITH ANGLE SCAN FOR
+C ZANGS = THE ALTITUDES TO CALCULATE A ZENITH ANGLE SCAN FOR, MEASURED
+C         IN cm
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(NA .GT. 0) THEN
+        READ (14,*) NANGS,NZANGS
+        READ (14,*) (ZANGS(J), J = 1,NZANGS)
+        IF(NANGS .LT. 0) THEN
+          NANGS = ABS(NANGS)
+          READ (14,*) (ANGS(J), J = 1,NANGS)
+        ELSE
+          DANG = 180.0D0 / DFLOAT(NANGS - 1)
+          DO J = 1,NANGS
+             ANGS(J) = DANG * DFLOAT(J - 1)
+          END DO
+        END IF
+      END IF
+      CLOSE(UNIT=14)
+      CLOSE(UNIT=16)
+C********1*********2*********3*********4*********5*********6*********7**
+C ARRAY FT CONTAINS THE SQUARE ROOT OF THE RATIO OF THE REFERENCE
+C TEMPERATURE TO THE ACTUAL TEMPERATURE
+C ARRAY A CONTAINS THE ACTUAL VOIGT PARAMETER 
+C********1*********2*********3*********4*********5*********6*********7**
+      SQT = SQRT(TEMP0)
+      DO I = 1,NL
+         FT(I) = SQT / SQRT(TEMP(I))
+         A(I) = A0 * FT(I)
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C GET GAUSSIAN WEIGHTS AND PIVOTS FOR ANGULAR QUADRATURE
+C********1*********2*********3*********4*********5*********6*********7**
+      CALL GAULEG(0.0D0,1.0D0,WU,AU,MU)
+C********1*********2*********3*********4*********5*********6*********7**
+C GET TOTAL TRANSITION PROBABILITY
+C********1*********2*********3*********4*********5*********6*********7**
+      SUMA = 0.0D0
+      DO L = 1,NLINE
+         SUMA = SUMA + GAM(L)
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE PARTITION FUNCTION (STORED IN ARRAY SUMB) FOR CALCULATING
+C POPULATIONS OF GROUND STATE SUB-LEVELS
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 1,NL
+         SUMB(I) = 0.0D0
+         TI = TEMP(I)
+         DO L = 1,NLN
+            SUMB(I) = SUMB(I) + GVL(L) *
+     &                EXP(-EVL(L) * 1.4387D0 / TI)
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CONSTANTS FOR WAVELENGTH QUADRATURE, TAKEN FROM SCHARMER AND
+C NORDLUND'S STOCKHOLM OBSERVATORY REPORT
+C********1*********2*********3*********4*********5*********6*********7**
+      AL10 = LOG(10.0D0)
+      ANRM = 10.0D0 ** (XMID + 0.5D0)
+      XMXQ = LOG10(ANRM * MAX(0.5D0, XMAX - XMID - 0.5D0))
+      DX = XMXQ / DFLOAT(MX - 1)
+C********1*********2*********3*********4*********5*********6*********7**
+C PUT VARIABLES DEPENDING ON ANGLE, WAVELENGTH, AND LINE COMPONENT
+C INTO ARRAYS THAT CYCLE THROUGH WAVELENGTH, THEN LINE COMPONENT,
+C THEN ANGLE
+C********1*********2*********3*********4*********5*********6*********7**
+      JJ = 0
+      DO K = 1,MU
+         DO L = 1,NLINE
+            ADD = 0.0D0
+            DO J = 1,MX
+               JJ = JJ + 1
+               U0(JJ) = WU(K)
+               UWT(JJ) = AU(K)
+               B(JJ) = GAM(L) / SUMA
+               EV(JJ) = EVAL(L)
+               FV(JJ) = OSC(L)
+               GV(JJ) = GVAL(L)
+               E1(JJ) = EE1(L)
+               PIZ(JJ) = WS(L)
+               DO IA = 1,NABS
+                  CA(JJ,IA) = CABS(L,IA)
+               END DO
+               XX = DFLOAT(J - 1) * DX
+               X10 = 10.0D0 ** XX
+               X0(JJ) = XX + (X10 - 1.0D0) / ANRM
+               XWT(JJ) = 2.0D0 * DX * (1.0D0 + X10 * AL10 / ANRM)
+               IF(J .EQ. 1) XWT(JJ) = XWT(JJ) / 2.0D0
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE SOLAR LINE PROFILE USING SUM OF OFFSET AND EQUAL GAUSSIANS
+C AND THEN NORMALIZE TO INPUT FLUX (FACTOR OF 4 IS SO THAT AN INPUT
+C OF MEASURED FLUX YIELDS AN OUTPUT OF 4*PI*I
+C********1*********2*********3*********4*********5*********6*********7**
+               IF(IXS .EQ. 1) THEN
+                 F(JJ) = 2.0D0 / SQPI * FLINE(L) / XDIS(L) *
+     &             (EXP(-((X0(JJ) - XOFF(L)) / XDIS(L)) ** 2) +
+     &              EXP(-((X0(JJ) + XOFF(L)) / XDIS(L)) ** 2))
+                 ADD = ADD + F(JJ) * XWT(JJ)
+               END IF
+            END DO
+            IF(IXS .EQ. 1) THEN
+              DO J = JJ - MX + 1,JJ
+                 F(J) = F(J) * FLINE(L) * 4.0D0 / ADD 
+              END DO
+            END IF
+         END DO
+      END DO
+      A1 = A(1)
+      FT1 = FT(1)
+      DELZ1 = Z(1) - Z(2)
+C********1*********2*********3*********4*********5*********6*********7**
+C GET SCATTERER, ABSORBER, AND TOTAL DENSITY SCALE HEIGHTS AT TOP OF
+C ATMOSPHERE, FOR OPTICAL DEPTH CALCULATION
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(XNS(2) .NE. XNS(1) .AND. XNS(1) .NE. 0.0D0 .AND.
+     &   XNS(2) .NE. 0.0D0) THEN
+        HS = DELZ1 / LOG(XNS(2) / XNS(1))
+      ELSE
+        HS = 0.0D0
+      END IF
+      DO IA = 1,NABS
+         IF(XNA(2,IA) .NE. XNA(1,IA) .AND. XNA(1,IA) .NE. 0.0D0 .AND.
+     &      XNA(2,IA) .NE. 0.0D0) THEN
+           HA(IA) = DELZ1 / LOG(XNA(2,IA) / XNA(1,IA))
+         ELSE
+           HA(IA) = 0.0D0
+         END IF
+      END DO
+      SK1 = XNS(1) * CS0 * FT1
+      T1 = TEMP(1)
+      SMB1 = SUMB(1)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE SCATTERER EXTINCTION, TOTAL EXTINCTION, AND OPTICAL DEPTH
+C AT TOP OF ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+      DO L = 1,NLINE
+         DO IA = 1,NABS
+            IAL = IA * L
+            AB0(IAL,1) = XNA(1,IA) * CABS(L,IA)
+         END DO
+      END DO
+      DO J = 1,M
+         EABS = 0.0D0
+         TABS = 0.0D0
+         DO IA = 1,NABS
+            ABEXT = XNA(1,IA) * CA(J,IA)
+            EABS = EABS + ABEXT
+            TABS = TABS + ABEXT * HA(IA)
+         END DO
+         X0J = X0(J) * FT1
+         VJ = VOIG1(X0J,A1)
+         PJ1 = FV(J) * GV(J) * EXP(-EV(J) * 1.4387D0 / T1) / SMB1
+         SC0(J,1) = PIZ(J) * SK1 * VJ * PJ1
+         EXT(J,1) = SK1 * VJ * PJ1 + EABS
+         TAU(J,1) = SK1 * VJ * PJ1 * HS + TABS
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE SCATTERER EXTINCTION, TOTAL EXTINCTION, AND OPTICAL DEPTH
+C THROUGHOUT REST OF ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 2,NL
+         DELZ = Z(I - 1) - Z(I)
+         AI = A(I)
+         FTI = FT(I) 
+         XNSI = XNS(I)
+         SKI = XNSI * CS0 * FTI
+         TI = TEMP(I)
+         SMB = SUMB(I)
+         DO L = 1,NLINE
+            DO IA = 1,NABS
+               IAL = IA * L
+               AB0(IAL,I) = XNA(I,IA) * CABS(L,IA)
+            END DO
+         END DO
+         DO J = 1,M
+            EABS = 0.0D0
+            DO IA = 1,NABS
+               EABS = EABS + XNA(I,IA) * CA(J,IA)
+            END DO
+            X0J = X0(J) * FTI
+            VJ = VOIG1(X0J,AI)
+            PJI = FV(J) * GV(J) * EXP(-EV(J) * 1.4387D0 / TI) /
+     &            SMB
+            SC0(J,I) = PIZ(J) * SKI * VJ * PJI
+            EXTJI = SKI * VJ * PJI + EABS
+            EXT(J,I) = EXTJI
+            EXTJI1 = EXT(J,I - 1)
+            IF(EXTJI1 .NE. EXTJI) THEN
+              TAU(J,I) = DELZ * (EXTJI - EXTJI1) / 
+     &                   LOG(EXTJI / EXTJI1) + TAU(J,I - 1)
+            ELSE
+              TAU(J,I) = DELZ * EXTJI + TAU(J,I - 1)
+            END IF
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT RESULTS SO FAR (INPUTS, MODEL ATMOSPHERE, OPTICAL DEPTHS, ETC)
+C********1*********2*********3*********4*********5*********6*********7**
+      CALL OUTPUT
+      TIM1 = DTIME(TIME)
+      PRINT *,' SUBROUTINE OUTPUT, USER = ', TIME(1),
+     &        ', SYSTEM = ', TIME(2), ', TOTAL = ', TIME(1) + TIME(2)
+C********1*********2*********3*********4*********5*********6*********7**
+C START LOOP OVER NSUN RUNS
+C********1*********2*********3*********4*********5*********6*********7**
+      DO IU = 1,NSUN
+         PRINT *,' FOR IU = ',IU
+         IF(ISOR .EQ. 0) THEN 
+C********1*********2*********3*********4*********5*********6*********7**
+C IF ISOR = 0, NEED TO CALCULATE FINAL SOURCE FUNCTION
+C********1*********2*********3*********4*********5*********6*********7**
+           IF(IXS .EQ. 0) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF IXS = 0, READ IN INTERNAL SOURCE NOW, SCALE SOURCE TEMPERATURE,
+C AND INTERPOLATE ONTO MODEL ALTITUDE GRID
+C********1*********2*********3*********4*********5*********6*********7**
+             IF(IU .EQ. 1) THEN
+               READ (18,*) (SSQ(I), I = 1,NLIS)
+               DO I = 1,NLIS
+                  ZQ1(I) = ZQ(I)
+                  TEMPSQ(I) = TEMPQ(I)
+                  IF(TFACT .GT. 0.0D0) THEN
+                    TEMPSQ(I) = TEMPSQ(I) * TFACT
+                  ELSE IF(TFACT .LT. 0.0D0) THEN
+                    TEMPSQ(I) = TEMP0 * ABS(TFACT)
+                  END IF
+               END DO
+             END IF
+             CALL REVORD(Z,NL)
+             CALL INTERPL(ZQ1,SSQ,NLIS,Z,SS,NL)
+             CALL REVORD(SS,NL)
+             CALL INTERP(ZQ,TEMPSQ,NLIS,Z,TEMPS,NL)
+             CALL REVORD(TEMPS,NL)
+             CALL REVORD(Z,NL)
+           END IF
+           IF(IXS .EQ. 2) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF IXS = 2, CALCULATE CHAPMAN PROFILE FOR INTERNAL SOURCE AND
+C ADJUST SOURCE TEMPERATURE, IF DESIRED
+C********1*********2*********3*********4*********5*********6*********7**
+             CALL COLUMN(XNSR,COL,Z,NL)
+             CALL INTERN(XNSR,COL,SS,Z,NL,COLS(IU),CSRC(IU))
+             IF(TFACT .GT. 0.0D0) THEN
+               DO I = 1,NL
+                  TEMPS(I) = TEMP(I) * TSCALE(IU)
+               END DO
+             ELSE IF(TFACT .LT. 0.0D0) THEN
+               DO I = 1,NL
+                  TEMPS(I) = TEMP0 * TSCALE(IU)
+               END DO
+             END IF
+           END IF
+           IF(IXS .EQ. 3) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF IXS = 3, CALCULATE NIGHTGLOW SOURCE NOW, SET SOURCE TEMPERATURE
+C EQUAL TO ION TEMPERATURE
+C********1*********2*********3*********4*********5*********6*********7**
+             IF(IU .EQ. 1) THEN
+               DO I = 1,NLIS
+                  SSQ(I) = TFACT * SQRT(1.160D3 / TEMPQQ(I)) *
+C     &                     ELQ(I) * DOP(I)
+     &                     ELQ(I) * ELQ(I)
+                  ZQ1(I) = ZQ(I)
+                  TEMPSQ(I) = TEMPQQ(I)
+               END DO
+             END IF
+             CALL REVORD(Z,NL)
+             CALL INTERPL(ZQ1,SSQ,NLIS,Z,SS,NL)
+             CALL REVORD(SS,NL)
+             CALL INTERP(ZQ1,TEMPSQ,NLIS,Z,TEMPS,NL)
+             CALL REVORD(TEMPS,NL)
+             CALL REVORD(Z,NL)
+           END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C SPREAD INTERNAL SOURCE OVER VOIGT PROFILE, THEN RENORMALIZE TO
+C TOTAL PRODUCTION RATE, AND CALCULATE COLUMN EMISSION RATE 
+C********1*********2*********3*********4*********5*********6*********7**
+           IF(IXS .NE. 1) THEN
+             DO I = 1,NL
+                FTS(I) = SQT / SQRT(TEMPS(I))
+                AS(I) = A0 * FTS(I)
+                ASI = AS(I)
+                FTSI = FTS(I)
+                SSI = SS(I)
+                XXX(NL + 1 - I) = Z(I)
+                YYY(NL + 1 - I) = SSI
+                SUM = 0.0D0
+                DO J = 1,M
+                   XS0J = X0(J) * FTSI
+                   VSJ = VOIG1(XS0J,ASI)
+                   S(J,I) = SSI * PIZ(J) * VSJ / SQPI * B(J) * FTSI
+                   SUM = SUM + S(J,I) * XWT(J)
+                END DO
+                IF(SUM .EQ. 0.0D0) SUM = 1.0D0
+                DO J = 1,M
+                   S(J,I) = S(J,I) * SSI * PIZ(J) * DFLOAT(MU) / SUM
+                END DO
+             END DO
+             CALL INTEG(XXX,YYY,NL,SST)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT INFORMATION ABOUT INTERNAL SOURCE STRENGTH AND TEMPERATURE
+C********1*********2*********3*********4*********5*********6*********7**
+             WRITE (15,'(//2X,I2,'')  RESULTS FOR '',
+     &             ''COLUMN INTERNAL SOURCE = '',1P1E10.3/)') IU,SST
+             IF(IXS .EQ. 2) WRITE (15,'(2X,''             AND '',
+     &             ''COLUMN DENSITY AT PEAK = '',1P1E10.3/)') COLS(IU)
+             WRITE (15,10)
+   10        FORMAT(/3X,'(I)',9X,'Z(I)',8X,'AS(I)',2X,
+     &              'SQRT(TEMP0/TEMPS(I))',1X,'TEMPS(I)',4X,
+     &              'INT. SOURCE(I)'/)
+             DO I = 1,NL,NTIME
+                WRITE (15,20) I,Z(I),AS(I),FTS(I),TEMPS(I),SS(I)
+             END DO
+   20        FORMAT(2X,I3,2X,1P5E14.3)
+           ELSE IF(IXS .EQ. 1) THEN 
+C********1*********2*********3*********4*********5*********6*********7**
+C IF IXS = 1, CALCULATE USEFF, THE EFFECTIVE COSINE SOLAR ZENITH
+C ANGLE AND ESTIMATE THE SOLAR FLUX THAT MAKES IT ALL THE WAY THROUGH
+C THE ATMOSPHERE WITHOUT SCATTERING OR BEING ABSORBED
+C********1*********2*********3*********4*********5*********6*********7**
+             CALL TAUSUN
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT USEFF
+C********1*********2*********3*********4*********5*********6*********7**
+             WRITE (15,121) NLINE
+  121        FORMAT(//3X,'(N)',9X,'Z(CM)',7X,'USEFF(CM-1)',
+     &               ' (L =  1 TO L =',I3,')'/)
+             DO IQ = 1,NL,NTIME
+                WRITE (15,160) IQ,Z(IQ),(USEFF(JQ,IQ), JQ = 1,ML)
+             END DO
+             FTHRU = 0.0D0
+             DO J = 1,ML
+                FTHRU = FTHRU + F(J) * USUN(IU) * XWT(J) / 4.0D0 *
+     &                  EXP(-TAU(J,NL) / USEFF(J,NL))
+             END DO
+             WRITE (15,'(//2X,I2,'')  RESULTS FOR '',
+     &              ''USUN = '',1P1E10.3//)') IU,USUN(IU)
+           END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C SET UP COEFFICIENT MATRICES AND VECTORS FOR FEAUTRIER SOLUTION
+C********1*********2*********3*********4*********5*********6*********7**
+           CALL COEFF
+           TIM1 = DTIME(TIME) 
+           PRINT *,' SUBROUTINE COEFF, USER = ', TIME(1),
+     &           ', SYSTEM = ', TIME(2), ', TOTAL = ', TIME(1) + TIME(2)
+C********1*********2*********3*********4*********5*********6*********7**
+C SOLVE RT EQUATION USING `LEAPFROG' METHOD FEAUTRIER SOLUTION
+C********1*********2*********3*********4*********5*********6*********7**
+           CALL SOLVE
+           TIM1 = DTIME(TIME)
+           PRINT *,' SUBROUTINE SOLVE, USER = ', TIME(1),
+     &           ', SYSTEM = ', TIME(2), ', TOTAL = ', TIME(1) + TIME(2)
+           IF(IXS .EQ. 1) THEN
+             WRITE (15,110) FTHRU
+  110        FORMAT(/1X,'UNSCATTERED SOLAR FLUX THROUGH =',1P1E10.3)
+           END IF
+         ELSE
+C********1*********2*********3*********4*********5*********6*********7**
+C IF ISOR = 1, READ IN PREVIOUSLY CALCULATED INITIAL AND FINAL SOURCE
+C FUNCTION
+C********1*********2*********3*********4*********5*********6*********7**
+           DO I = 1,NL
+              READ (20) ZI
+              DO J = 1,M
+                 READ (20) SI(J,I),SF(J,I),EXTJI
+              END DO
+           END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT FULL INITIAL AND FINAL SOURCES, SINCE THIS IS NORMALLY DONE
+C IN `SOLVE' ROUTINE
+C********1*********2*********3*********4*********5*********6*********7**
+           WRITE (15,120) MX,NLINE,MU
+  120      FORMAT(//3X,'(N)',4X,'Z(CM)',16X,'INITIAL SOURCE',
+     &            ' (((X =  1 TO X =',I3,') L =  1 TO L =',I3,
+     &            ') U = 1 TO U =',I3,')'/)
+           DO I = 1,NL,NTIME
+              WRITE (15,160) I,Z(I),(SI(J,I), J = 1,M)
+           END DO
+           WRITE (15,130) MX,NLINE,MU
+  130      FORMAT(//3X,'(N)',4X,'Z(CM)',16X,'FINAL SOURCE',
+     &            ' (((X =  1 TO X =',I3,') L =  1 TO L =',I3,
+     &            ') U = 1 TO U =',I3,')'/)
+           DO I = 1,NL,NTIME
+              WRITE (15,160) I,Z(I),(SF(J,I), J = 1,M)
+           END DO
+  160      FORMAT(2X,I3,2X,1P1E10.3,13X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &            30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &            30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &            30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &            30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3)
+         END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE INTENSITIES FOR A GIVEN DIRECTION AT ALL POINTS THROUGHOUT
+C THE ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+         IF(EMA(1) .NE. 90.0D0) THEN
+           CALL FORMAL
+           TIM1 = DTIME(TIME)
+           PRINT *,' SUBROUTINE FORMAL, USER = ', TIME(1),
+     &           ', SYSTEM = ', TIME(2), ', TOTAL = ', TIME(1) + TIME(2)
+         END IF
+         IF(NA .GT. 0) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NZ > 0, CALCULATE ZENITH ANGLE SCANS OF INTENSITY AT SELECTED
+C ALTITUDES
+C********1*********2*********3*********4*********5*********6*********7**
+           CALL ANGLE
+           TIM1 = DTIME(TIME)
+           PRINT *,' SUBROUTINE ANGLE, USER = ', TIME(1),
+     &         ', SYSTEM = ', TIME(2), ', TOTAL = ', TIME(1) + TIME(2)
+         END IF
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C END OF LOOP OVER NSUN, END OF PROGRAM
+C********1*********2*********3*********4*********5*********6*********7**
+      STOP
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE COLUMN(DEN,COL,Z,NZ)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES COLUMN DENSITIES ASSUMING EXPONENTIAL
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION DEN(NZ),COL(NZ),Z(NZ)
+C********1*********2*********3*********4*********5*********6*********7**
+C GET SCALE HEIGHT AT TOP OF ATMOSPHERE, IF APPLICABLE
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(DEN(2) .EQ. 0.0D0 .OR. DEN(1) .EQ. 0.0D0 .OR.
+     &   DEN(2) .EQ. DEN(1)) THEN
+        HDEN = 0.0D0
+      ELSE
+        HDEN = (Z(1) - Z(2)) / LOG(DEN(2) / DEN(1))
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE COLUMN DENSITIES
+C********1*********2*********3*********4*********5*********6*********7**
+      COL(1) = HDEN * DEN(1)
+      DO IZ = 2,NZ
+         DZ = Z(IZ - 1) - Z(IZ)
+         IF(DEN(IZ) .EQ. 0.0D0 .OR. DEN(IZ - 1) .EQ. 0.0D0 .OR.
+     &      DEN(IZ) .EQ. DEN(IZ - 1)) THEN
+           COL(IZ) = COL(IZ - 1) + DZ * (DEN(IZ) + DEN(IZ - 1)) / 2.0D0
+         ELSE
+           COL(IZ) = COL(IZ - 1) + DZ * (DEN(IZ) - DEN(IZ - 1)) /
+     &               LOG(DEN(IZ) / DEN(IZ - 1))
+         END IF
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTERN(DEN,COL,V,Z,NZ,COLS,CSRC)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES CHAPMAN-TYPE INITIAL SOURCE PROFILE FOR PRECIPITATING
+C PARTICLES THAT ARE ISOTROPIC OVER DOWNWARD HEMISPHERE, WITH `COLS'
+C THE COLUMN DENSITY AT THE PEAK OF THE EMISSION, AND `CSRC' THE COLUMN
+C EMISSION RATE
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION DEN(NZ),COL(NZ),V(NZ),Z(NZ)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE CHAPMAN-TYPE PROFILE
+C********1*********2*********3*********4*********5*********6*********7**
+      DO IZ = 1,NZ
+         ARG = COL(IZ) / COLS
+         V(IZ) = DEN(IZ) * EXPO(ARG,2) / COLS
+         IF(V(IZ) .LT. 1.0D-30) V(IZ) = 1.0D-30
+      END DO
+      CALL REVORD(V,NZ)
+      CALL REVORD(Z,NZ)
+      CALL INTEG(Z,V,NZ,VSUM)
+C********1*********2*********3*********4*********5*********6*********7**
+C NORMALIZE COLUMN EMISSION RATE TO `CSRC'
+C********1*********2*********3*********4*********5*********6*********7**
+      DO IZ = 1,NZ
+         V(IZ) = V(IZ) * CSRC / VSUM
+      END DO
+      CALL REVORD(V,NZ)
+      CALL REVORD(Z,NZ)
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE OUTPUT
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUTS THE BASIC INPUT PARAMETERS, MODEL ATMOSPHERE, AND OPTICAL
+C PARAMETERS (SCATTERING AND TOTAL EXTINCTION, PLUS OPTICAL DEPTH)
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /OUT/ XNS(99),XNSR(99),XNA(99,4),TEMP(99),TEMPS(99),SS(99),
+     &             TEMP0,GAM(3),EVAL(3),OSC(3),GVAL(3),CABS(3,4),EV(72),
+     &             FV(72),GV(72),CA(72,4),EE1(3),FLINE(3),XDIS(3),
+     &             XOFF(3),WS(3),FINU(400),A0,CS0,SST,NABS
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      WRITE (15,10) NL,MU,MX,NLINE,KIND,NTIME,XMAX,XMID,TEMP0,A0,CS0
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT BASIC INPUT PARAMETERS
+C********1*********2*********3*********4*********5*********6*********7**
+   10 FORMAT(1X,'# OF LAYERS = ',I3/
+     &     1X,'# OF ZENITH ANGLES PER HEMISPHERE = ',I2/
+     &     1X,'# OF FREQUENCIES, LINE CENTRE TO XMAX = ',I3/
+     &     1X,'# OF LINES IN MULTIPLET = ',I2/
+     &     1X,'KIND OF REDISTRIBUTION',
+     &         ' (AAPR=1,VCR=2,MS=3) = ',I2/
+     &     1X,'PRINT EVERY ',I2,' LAYER(S)'//
+     &     1X,'FREQUENCIES OUT TO XMAX = ',1P1E10.3/
+     &     1X,'SHIFT FROM LIN TO LOG AT XMID = ',1P1E10.3/
+     &     1X,'REFERENCE TEMP = ',1P1E10.3/
+     &     1X,'A0 = ',1P1E10.3,5X,'CS0 (CM2) = ',1P1E10.3)
+      WRITE (15,20)
+   20 FORMAT(/1X,'LINE #',5X,'A (SEC-1)',5X,'E LOWER (CM-1)',
+     &       5X,'F VALUE',5X,'STAT. WEIGHT',5X,'RAYLEIGH',7X,
+     &       'PIZERO'/)
+      DO L = 1,NLINE
+         WRITE (15,30) L,GAM(L),EVAL(L),OSC(L),GVAL(L),EE1(L),WS(L)
+      END DO
+   30 FORMAT(3X,I1,7X,1P1E10.3,7X,1P1E10.3,5X,1P1E10.3,5X,1P1E10.3,
+     &       5X,1P1E10.3,5X,1P1E10.3)
+      WRITE (15,32) NABS
+   32 FORMAT(/1X,'(CM2) FOR SPECIES 1 TO ',I1/)
+      DO L = 1,NLINE
+         WRITE (15,34) L,(CABS(L,IA), IA = 1,NABS)
+      END DO
+   34 FORMAT(3X,I3,1P5E14.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C IF THE SOURCE IS EXTERNAL, OUTPUT THE COS(SOLAR ZENITH ANGLE) AND FLUX
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(IXS .EQ. 1) THEN
+        WRITE (15,36) (USUN(IU), IU = 1,NSUN)
+   36   FORMAT(/1X,'EXTERNAL SOURCE',
+     &          5X,'COS SOLAR ZENITH ANGLE = ',1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3)
+        WRITE (15,38) (FINU(IU), IU = 1,NSUN)
+   38   FORMAT(33X,'INPUT FLUX = ',1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/
+     &          46X,1P5E10.3/46X,1P5E10.3/46X,1P5E10.3/)
+        WRITE (15,40)
+   40   FORMAT(/1X,'LINE #',2X,'FLUX (PH CM-2 S-1)',
+     &         4X,'XOFF (DU)',9X,'XDIS (DU)'/)
+        DO L = 1,NLINE
+           WRITE (15,50) L,FLINE(L),XOFF(L),XDIS(L)
+        END DO
+   50   FORMAT(3X,I1,8X,1P1E10.3,8X,1P1E10.3,8X,1P1E10.3)
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT WEIGHTS AND PIVOTS FOR COS(ZENITH ANGLE) AND WAVELENGTH
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,60) 
+   60 FORMAT(//3X,'(J)',4X,'MU(J)',7X,'X(J)',5X,'MU WT(J)',
+     &        3X,'X WT(J)',6X,'F(J)',7X,'B(J)'/)
+      WRITE (15,70) (J,U0(J),X0(J),UWT(J),XWT(J),F(J),B(J), J = 1,M)
+   70 FORMAT(2X,I3,2X,1P1E10.3,1X,1P1E10.3,1X,1P1E10.3,
+     &        1X,1P1E10.3,1X,1P1E10.3,1X,1P1E10.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT MODEL ATMOSPHERE SCATTERER AND ABSORBER DENSITIES
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,80) NABS
+   80 FORMAT(//1X,'ATMOSPHERE'//3X,'(I)',9X,'Z(I)',8X,'NSCA(I)',7X,
+     &       'NABS(I,IA) FOR IA = 1 TO ',I1/)
+      DO I = 1,NL,NTIME
+         WRITE (15,90) I,Z(I),XNS(I),(XNA(I,IA), IA = 1,NABS)
+      END DO
+   90 FORMAT(2X,I3,2X,1P2E14.3,5X,1P4E12.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT MODEL ATMOSPHERE TEMPERATURE AND TOTAL DENSITY
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,100)
+  100 FORMAT(//3X,'(I)',9X,'Z(I)',10X,'A(I)',2X,
+     &        'SQRT(TEMP0/TEMP(I))',1X,'TEMP(I)',5X,'NSCR(I)'/)
+      DO I = 1,NL,NTIME
+         WRITE (15,110) I,Z(I),A(I),FT(I),TEMP(I),XNSR(I)
+      END DO
+  110 FORMAT(2X,I3,2X,1P5E14.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT SCATTERING EXTINCTION
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,120) NLINE
+  120 FORMAT(//3X,'(N)',9X,'Z(CM)',7X,'KSCA(CM-1)',
+     &        ' (L =  1 TO L =',I3,')'/)
+      DO I = 1,NL,NTIME
+         WRITE (15,160) I,Z(I),(SC0(J,I), J = 1,ML)
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT TOTAL EXTINCTION
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,130) MX,NLINE
+  130 FORMAT(//3X,'(N)',4X,'Z(CM)',16X,'KEXT(CM-1)',
+     &        ' ((M =  1 TO M =',I3,') L =  1 TO L =',I3,')'/)
+      DO I = 1,NL,NTIME
+         WRITE (15,160) I,Z(I),(EXT(J,I), J = 1,ML)
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT OPTICAL DEPTH
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,140) MX,NLINE
+  140 FORMAT(//3X,'(N)',4X,'Z(CM)',16X,'TAU',
+     &        ' ((M =  1 TO M =',I3,') L =  1 TO L =',I3,')'/)
+      DO I = 1,NL,NTIME
+         WRITE (15,160) I,Z(I),(TAU(J,I), J = 1,ML)
+      END DO
+  160 FORMAT(2X,I3,2X,1P1E10.3,13X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3)
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      FUNCTION EXPO(X,N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C THIS FUNCTION CALCULATES THE EXPONENTIAL INTEGRAL En(x) USING
+C THE ALGORITHMS LISTED ON PAGE 231 OF ABRAMOWITZ & STEGUN
+C********1*********2*********3*********4*********5*********6*********7**
+      DATA A0/-0.57721566/,A1/0.99999193/,A2/-0.24991055/,
+     &     A3/0.05519968/,A4/-0.00976004/,A5/0.00107857/
+      DATA B1/8.5733287401/,B2/18.0590169730/,
+     &     B3/8.6347608925/,B4/0.2677737343/
+      DATA C1/9.5733223454/,C2/25.6329561486/,
+     &     C3/21.0996530827/,C4/3.9584969228/
+C********1*********2*********3*********4*********5*********6*********7**
+C CHECK FOR VALID ARGUMENTS
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(X .LT. 0.0 .OR. N .LT. 0 .OR. (X .EQ. 0.0 .AND. N .LE. 1)) THEN
+        PRINT *,' INVALID ARGUMENT USED IN FUNCTION EXPO'
+        STOP
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CHECK FOR SPECIAL CASES; N = 0, X = 0.0
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(N .EQ. 0) THEN
+        EXPO = EXP(-X) / X
+      ELSE IF(X .EQ. 0.0) THEN
+        EXPO = 1.0 / DFLOAT(N - 1)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE EXPO(X,1)
+C********1*********2*********3*********4*********5*********6*********7**
+      ELSE
+        IF(X .LE. 1.0) THEN
+          E1 = ((((A5 * X + A4) * X + A3) * X + A2) * X + A1) * X + A0 -
+     &         LOG(X)
+        ELSE
+          E1 = ((((X + B1) * X + B2) * X + B3) * X + B4) /
+     &         ((((X + C1) * X + C2) * X + C3) * X + C4) *
+     &         EXP(-X) / X
+        END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C USE RECURSION FORMULA TO GET EXPO(X,N) FROM EXPO(X,1)
+C********1*********2*********3*********4*********5*********6*********7**
+        IF(N .GT. 1) THEN
+          DO I = 1,N - 1
+             E1 = (EXP(-X) - X * E1) / DFLOAT(I)
+          END DO
+        END IF
+        EXPO = E1
+      END IF
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE COEFF
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES THE COEFFICIENT MATRICES AND VECTORS FOR THE SET OF TWO
+C LINEAR, FIRST-ORDER COUPLED D.E.'S THAT DESCRIBE THE RT EQUATION.
+C I.E., CALCULATES C, D, AND G IN
+C
+C       A(i) # h(i+1/2) + B(i) # h(i-1/2) = C(i) # j(i) + D(i)
+C AND   E(i+1/2) # j(i+1) + F(i+1/2) # j(i) = G(i+1/2) # h(i+1/2)
+C
+C (A, B, E, AND F ARE SO SIMPLE THAT THEY ARE EVALUATED IN THE `SOLVE'
+C SUBROUTINE).
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /FORM/ XIS(72,99,25),ANG(400),FOV(25),
+     &              WFOV(25),RD(9,99),FIELD,THETA,R0,
+     &              NFOV,NATM
+      COMMON /INTENS/ SF(72,99),SI(72,99),SA(3,99)
+      COMMON /MAT/ C0,C1(72,99),G1(72,99),DEL(99)
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      REAL*4 C0(72,72,99)
+      DIMENSION RP(72,72),TMSC(72,72),TVSD(72),TVSH(72),
+     &          TVS1(72),TVSS1(72),TVST1(72),TVSE1(72),TVSE2(72)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE AND STORE DELTA Z'S
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 1,NL1
+         DEL(I) = Z(I + 1) - Z(I)
+      END DO
+      DEL(NL) = DEL(NL1)
+      AP1 = -1.0D0
+C********1*********2*********3*********4*********5*********6*********7**
+C LOOP OVER ALL ALTITUDES. AP1 AND AP3 ARE USED TO CHECK IF `RED'
+C SUBROUTINE NEEDS TO BE CALLED OR NOT (E.G., IF THE ATMOSPHERE IS
+C ISOTHERMAL, WE DON'T WANT TO BOTHER EVALUATING THE REDISTRIBUTION
+C FUNCTION AT EACH LEVEL).
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 1,NL
+         AP3 = A(I)
+         DELI = DEL(I)
+C********1*********2*********3*********4*********5*********6*********7**
+C GET EXTINCTIONS AND OPTICAL DEPTHS ON MAIN ALTITUDE GRID POINTS.
+C********1*********2*********3*********4*********5*********6*********7**
+         CALL VXFER(SC0,I,TVS1)
+         CALL VXFER(EXT,I,TVSE1)
+         CALL VXFER(TAU,I,TVST1)
+         IF(IXS .NE. 1) THEN
+           CALL VXFER(S,I,TVSS1)
+         ELSE
+           CALL VXFER(USEFF,I,TVSS1)
+         END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C ESTIMATE EXTINCTION IN BETWEEN MAIN ALTITUDE GRID POINTS.
+C********1*********2*********3*********4*********5*********6*********7**
+         IF(I .LT. NL) THEN
+           II = I + 1
+           CALL VXFER(EXT,II,TVSE2)
+           DO J = 1,M
+              TVSE2(J) = SQRT(TVSE1(J) * TVSE2(J))
+           END DO
+         END IF
+         IF(IU .EQ. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C GET REDISTRIBUTION FUNCTION
+C********1*********2*********3*********4*********5*********6*********7**
+           IF(AP3 .NE. AP1) CALL RED(RP,I)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE DIAGONAL AND FULL PARTS OF C MATRIX, PLUS G DIAGONAL MATRIX.
+C ACCOUNT FOR BOUNDARY CONDITIONS (NO INCIDENT DIFFUSE RADIATION AT
+C EITHER BOUNDARY).
+C********1*********2*********3*********4*********5*********6*********7**
+           DO J = 1,M
+              BJ = B(J)
+              JR = MOD(J - 1,ML) + 1
+              DO K = 1,M
+                 KR = MOD(K - 1,ML) + 1
+                 BUX = BJ * UWT(K) * XWT(K)
+                 TMSC(J,K) = BUX * TVS1(K) * RP(JR,KR)
+              END DO
+              TVSD(J) = -TVSE1(J)
+              TVSH(J) = -TVSE2(J)
+              IF(I .EQ. 1 .OR. I .EQ. NL) TVSD(J) = TVSD(J) + 2.0D0 *
+     &                                              U0(J) / DELI
+           END DO
+           CALL IMXFER(TMSC,I,C0)
+           CALL IVXFER(TVSD,I,C1)
+           CALL IVXFER(TVSH,I,G1)
+         END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE D VECTOR (I.E., THE INITIAL VOLUME EMISSION RATE)
+C********1*********2*********3*********4*********5*********6*********7**
+         IF(IXS .NE. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERNAL SOURCE
+C********1*********2*********3*********4*********5*********6*********7**
+           DO J = 1,M
+              TVSD(J) = TVSS1(J)
+           END DO
+         ELSE IF(IXS .EQ. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C EXTERNAL SOURCE - SOLAR
+C********1*********2*********3*********4*********5*********6*********7**
+           DO J = 1,M
+              SP = 0.0D0
+              SM = 0.0D0
+              JR = MOD(J - 1,ML) + 1
+              DO K = 1,ML
+                 SP = EXP(-TVST1(K) / TVSS1(K)) * F(K) *
+     &                TVS1(K) * RP(JR,K) * XWT(K) + SP
+              END DO
+              TVSD(J) = SP * B(J) / 4.0D0
+           END DO
+         END IF
+         CALL IVXFER(TVSD,I,SI)
+         AP1 = AP3
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE RED(RE,I)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES THE REDISTRIBUTION FUNCTION FOR RESONANCE SCATTERING
+C KIND = 1 => ANGLE AVERAGED PARTIAL REDISTRIBUTION RII(X,X') (AAPR)
+C KIND = 2 => VOIGT COMPLETE REDISTRIBUTION (VCR)
+C KIND = 3 => MONOCHROMATIC SCATTERING (MS)
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      DIMENSION RE(72,72),RF(72)
+      DATA ALPHA2/3.24D0/
+      AA = A(I)
+      FF = FT(I)
+      DO J = 1,ML
+         X1 = X0(J) * FF
+         V1 = VOIG1(X1,AA)
+         DO KK = 1,NLINE
+            SUM = 0.0D0
+            K1 = (KK - 1) * MX + 1
+            K2 = KK * MX
+            DO K = K1,K2
+               X2 = X0(K) * FF
+               V2 = VOIG1(X2,AA)
+C********1*********2*********3*********4*********5*********6*********7**
+C KIND = 1: ANGLE-AVERAGED PARTIAL REDISTRIBUTION (AAPR)
+C APPROXIMATE RII(X,X') BY EXPANDING THE VOIGT FUNCTION IN
+C A SERIES IN THE VOIGT PARAMETER `a'.
+C BASED ON AYRES, ASTROPHYS. J., 294, 153, 1985; WITH EXPANSIONS TO
+C HIGHER ORDER TERMS & INCLUDING RAYLEIGH PHASE FUNCTION.
+C********1*********2*********3*********4*********5*********6*********7**
+               IF(KIND .EQ. 1) THEN
+                 E1K = E1(K)
+                 XMAX = MAX(ABS(X1),ABS(X2))
+                 XMIN = MIN(ABS(X1),ABS(X2))
+                 R1 = 0.5D0 * (X1 - X2)
+                 Q1 = ABS(R1)
+                 S1 = 0.5D0 * (X1 + X2)
+                 T1 = ABS(S1)
+                 R1S = R1 * R1
+                 S1S = S1 * S1
+                 R2S = S1S
+                 S2S = R1S
+                 IF(S1S .LE. ALPHA2) S1S = ALPHA2
+                 IF(S2S .LE. ALPHA2) S2S = ALPHA2
+                 ERFCXMAX = ERFC(XMAX)
+                 ERFCIQ1 = ERFCI(Q1)
+                 ERFCIT1 = ERFCI(T1)
+                 EXPR1S = EXP(-R1S)
+                 EXPR2S = EXP(-R2S)
+                 ADD=ERFCXMAX
+     & + AA*(ERFCIQ1/S1S+ERFCIT1/S2S)/PI
+     & + AA*((ERFCIQ1*(1.5D0+R1S)-0.5D0*EXPR1S/SQPI)/S1S/S1S+
+     &       (ERFCIT1*(1.5D0+R2S)-0.5D0*EXPR2S/SQPI)/S2S/S2S)/PI
+     & + AA*((ERFCIQ1*(1.5D1+4.0D0*R1S*(5.0D0+R1S))-
+     &       (7.0D0+2.0D0*R1S)*EXPR1S/SQPI)/S1S/S1S/S1S+
+     &       (ERFCIT1*(1.5D1+4.0D0*R2S*(5.0D0+R2S))-
+     &       (7.0D0+2.0D0*R2S)*EXPR2S/SQPI)/S2S/S2S/S2S)/4.0D0/PI
+                 IF(E1K .NE. 0.0D0) THEN
+                   ADD=ADD+E1K*((0.5D0+3.0D0*(XMAX*XMAX+XMIN*XMIN)+
+     &   6.0D0*(XMAX*XMIN)**2)*ERFCXMAX-3.0D0*XMAX*(1.0D0+2.0D0*XMIN*
+     &   XMIN)*EXP(-XMAX*XMAX)/SQPI)/4.0D0
+     & + AA*E1K*((ERFCIQ1*(1.0D1+8.0D0*R1S*(5.0D0+2.0D0*R1S))-8.0D0*
+     &      (1.0D0+R1S)*EXPR1S/SQPI)/S1S+
+     &           (ERFCIT1*(1.0D1+8.0D0*R2S*(5.0D0+2.0D0*R2S))-8.0D0*
+     &      (1.0D0+R2S)*EXPR2S/SQPI)/S2S)/2.0D1/PI
+     & + AA*E1K*((ERFCIQ1*(10.5D1+2.0D0*R1S*(24.5D1+2.4D1*R1S*(7.0D0+
+     &      R1S)))-(8.3D1+1.2D1*R1S*(1.1D1+2.0D0*R1S))*EXPR1S/SQPI)/
+     &   S1S/S1S+(ERFCIT1*(10.5D1+2.0D0*R2S*(24.5D1+2.4D1*R2S*(7.0D0+
+     &      R2S)))-(8.3D1+1.2D1*R2S*(1.1D1+2.0D0*R2S))*EXPR2S/SQPI)/
+     &   S2S/S2S)/1.4D2/PI
+     & + AA*E1K*((ERFCIQ1*(31.5D1+4.0D0*R1S*(4.2D2+R1S*(39.9D1+4.0D0*
+     &      R1S*(2.7D1+2.0D0*R1S))))-(24.3D1+2.0D0*R1S*(26.7D1+8.0D0*
+     &      R1S*(1.2D1+R1S)))*EXPR1S/SQPI)/S1S/S1S/S1S+
+     &           (ERFCIT1*(31.5D1+4.0D0*R2S*(4.2D2+R2S*(39.9D1+4.0D0*
+     &      R2S*(2.7D1+2.0D0*R2S))))-(24.3D1+2.0D0*R2S*(26.7D1+8.0D0*
+     &      R2S*(1.2D1+R2S)))*EXPR2S/SQPI)/S2S/S2S/S2S)/16.8D1/PI
+                 END IF
+                 RF(K) = ADD * 2.0D0 * SQPI / V2
+C********1*********2*********3*********4*********5*********6*********7**
+C KIND = 2: VOIGT COMPLETE REDISTRIBUTION (VCR)
+C********1*********2*********3*********4*********5*********6*********7**
+               ELSE IF(KIND .EQ. 2) THEN
+                 RF(K) = 2.0D0 * V1 / SQPI
+C********1*********2*********3*********4*********5*********6*********7**
+C KIND = 3: MONOCHROMATIC SCATTERING (MS)
+C********1*********2*********3*********4*********5*********6*********7**
+               ELSE IF(KIND .EQ. 3) THEN
+                 IF(X1 .EQ. X2) THEN
+                   RF(K) = 2.0D0 / XWT(K)
+                 ELSE
+                   RF(K) = 0.0D0
+                 END IF
+               END IF
+               SUM = SUM + RF(K) * XWT(K) * V2
+            END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C RENORMALIZE REDISTRIBUTION FUNCTION SO THAT SUM OF REDISTRIBUTION
+C FUNCTION OVER WAVELENGTH YIELDS THE VOIGT FUNCTION.
+C********1*********2*********3*********4*********5*********6*********7**
+            DO K = K1,K2
+               RE(J,K) = RF(K) * V1 / SUM
+            END DO
+         END DO
+      END DO
+      RETURN
+      END   
+C********1*********2*********3*********4*********5*********6*********7**
+      DOUBLE PRECISION FUNCTION ERFCI(X)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES THE FIRST REPEATED INTEGRAL OF THE ERROR FUNCTION, ERFCI,
+C AS DEFINED BY ABRAMOWITZ AND STEGUN, P. 299.
+C********1*********2*********3*********4*********5*********6*********7**
+      ERFCI = EXP(-X * X) / 1.772453851D0 - X * ERFC(X)
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      DOUBLE PRECISION FUNCTION ERFC(X)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES THE COMPLEMENTARY ERROR FUNCTION.
+C FROM NUMERICAL RECIPES, P. 164.
+C********1*********2*********3*********4*********5*********6*********7**
+      T = 1.0D0 / (1.0D0 + 0.5D0 * X)
+      ERFC = T * EXP(-X * X - 1.26551223D0 + T * (1.00002368D0 + T *
+     &         (0.37409196D0 + T * (0.09678418D0 + T * (-0.18628806D0 +
+     &         T * (0.27886807D0 + T * (-1.13520398D0 + T *
+     &         (1.48851587D0 + T * (-0.82215223D0 + T *
+     &         0.17087277D0)))))))))
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      DOUBLE PRECISION FUNCTION EXERFC(X)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES THE COMPLEMENTARY ERROR FUNCTION TIMES EXP(X*X).
+C FROM NUMERICAL RECIPES, P. 164
+C********1*********2*********3*********4*********5*********6*********7**
+      T = 1.0D0 / (1.0D0 + 0.5D0 * X)
+      EXERFC = T * EXP(-1.26551223D0 + T * (1.00002368D0 + T *
+     &         (0.37409196D0 + T * (0.09678418D0 + T * (-0.18628806D0 +
+     &         T * (0.27886807D0 + T * (-1.13520398D0 + T *
+     &         (1.48851587D0 + T * (-0.82215223D0 + T *
+     &         0.17087277D0)))))))))
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE SOLVE
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C THE COUPLED, FIRST-ORDER EQUATIONS IN THE MEAN (j) AND NET (h)
+C INTENSITIES ARE SOLVED FOR USING A STANDARD `LEAPFROG' TECHNIQUE,
+C WITH FORWARD RECURSION AND BACKWARD SUBSTITUTION.
+C THE ALGORITHM IS OUTLINED BY MILKEY, SHINE, AND MIHALAS, 
+C ASTROPHYS. J., 202, 250-258, 1975.
+C
+C BASICALLY, WE HAVE REDUCED THE RT EQUATION TO TWO, FIRST-ORDER
+C EQUATIONS IN J & H, WHICH MAY BE WRITTEN AS
+C
+C       A(i) # h(i+1/2) + B(i) # h(i-1/2) = C(i) # j(i) + D(i)
+C AND   E(i+1/2) # j(i+1) + F(i+1/2) # j(i) = G(i+1/2) # h(i+1/2)
+C
+C WHERE A, B, E, F, AND G, ARE DIAGONAL MATRICES, D, j, and h ARE
+C VECTORS, AND C IS A FULL MATRIX. INDEX i REPRESENTS ALTITUDE LEVEL.
+C THESE EQUATIONS ARE SOLVED BY ASSUMING THE FOLLOWING EXPRESSIONS
+C FOR j & h,
+C
+C       j(i) = V(i) # h(i+1/2) + W(i)
+C AND   h(i+1/2) = U(i+1/2) # j(i+1) + T(i+1/2)
+C
+C WHERE V and U ARE FULL MATRICES AND W AND T ARE VECTORS. 
+C SUBSTITUTING FOR h(i-1/2) AND j(i) IN THE COUPLED EQUATIONS, WE
+C GET RECURSION RELATIONS INVOLVING V, W, U, AND T,
+C
+C       V(i) = INV{C(i) - B(i) # U(i-1/2)} # A(i) 
+C       W(i) = -INV{C(i) - B(i) # U(i-1/2)} # (D(i) - B(i) # T(i-1/2))
+C       U(i+1/2) = INV{G(i+1/2) - F(i+1/2) # V(i)} # E(i+1/2) 
+C AND   T(i+1/2) = INV{G(i+1/2) - F(i+1/2) # V(i)} # F(i+1/2) # T(i-1/2)
+C
+C AT THE UPPER BOUNDARY, B(1) = 0, SO THAT V(1) AND W(1) MAY BE
+C CALCULATED WITHOUT KNOWING U(1/2) AND T(1/2). `LEAPFROGGING' TO
+C THE BOTTOM OF THE ATMOSPHERE, A(N) = 0, SO THAT V(N) = 0 AND THUS
+C j(N) = W(N). THEN WE JUST BACK SUBSTITUTE TO OBTAIN j & h
+C THROUGHOUT THE ATMOSPHERE.
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /INTENS/ SF(72,99),SI(72,99),SA(3,99)
+      COMMON /MAT/ C0,C1(72,99),G1(72,99),DEL(99)
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      COMMON /OUT/ XNS(99),XNSR(99),XNA(99,4),TEMP(99),TEMPS(99),SS(99),
+     &             TEMP0,GAM(3),EVAL(3),OSC(3),GVAL(3),CABS(3,4),EV(72),
+     &             FV(72),GV(72),CA(72,4),EE1(3),FLINE(3),XDIS(3),
+     &             XOFF(3),WS(3),FINU(400),A0,CS0,SST,NABS
+      REAL*4 C0(72,72,99),U(72,72,99),V(72,72,99)
+      DIMENSION T(72,99),W(72,99),TMS1(72,72),TMS2(72,72),TMS3(72,72),
+     &          TMS4(72,72),TVS1(72),TVS2(72),TVS3(72),TVS4(72)
+      DIMENSION SOR1(3,99),SOR2(3,99)
+      DIMENSION INDX(72),XL(3)
+C********1*********2*********3*********4*********5*********6*********7**
+C DO FORWARD RECURSION FROM TOP OF ATMOSPHERE TO BOTTOM
+C********1*********2*********3*********4*********5*********6*********7**
+      CALL MXFER(C0,1,TMS4)
+      CALL VXFER(C1,1,TVS4)
+      CALL DMADD(TVS4,TMS4,TMS1)
+      CALL LUDCMP(TMS1,M,MAXM,INDX) 
+      FAC = 2.0 / DEL(1)
+      CALL MDMLT(TMS1,U0,TMS2,INDX,FAC)
+      CALL IMXFER(TMS2,1,V)
+      CALL VXFER(SI,1,TVS2)
+      CALL LUBKSB(TMS1,M,MAXM,INDX,TVS2) 
+      CALL VNEG(TVS2)
+      CALL IVXFER(TVS2,1,W)
+      DO J = 1,NL1
+         J1 = J + 1
+         FAC1 = 1.0 / DEL(J)
+         FAC2 = 2.0 / (DEL(J) + DEL(J1))
+         IF(J1 .EQ. NL) FAC2 = 2.0 * FAC1
+         CALL DMMLT(U0,TMS2,TMS3,FAC1)
+         CALL VXFER(G1,J,TVS4)
+         CALL DMADD(TVS4,TMS3,TMS1)
+         CALL LUDCMP(TMS1,M,MAXM,INDX)
+         CALL MDMLT(TMS1,U0,TMS2,INDX,FAC1)
+         CALL IMXFER(TMS2,J,U)
+         CALL DVMLT(U0,TVS2,TVS3,FAC1)
+         CALL LUBKSB(TMS1,M,MAXM,INDX,TVS3) 
+         CALL VNEG(TVS3)
+         CALL IVXFER(TVS3,J,T)
+         CALL DMMLT(U0,TMS2,TMS3,FAC2)
+         CALL MXFER(C0,J1,TMS4)
+         CALL VXFER(C1,J1,TVS4)
+         CALL DMADD(TVS4,TMS4,TMS2)
+         CALL MADD(TMS2,TMS3,TMS1)
+         CALL LUDCMP(TMS1,M,MAXM,INDX)
+         IF(J1 .NE. NL) THEN
+           CALL MDMLT(TMS1,U0,TMS2,INDX,FAC2)
+           CALL IMXFER(TMS2,J1,V)
+         END IF
+         CALL DVMLT(U0,TVS3,TVS4,FAC2)
+         CALL VXFER(SI,J1,TVS1)
+         CALL VADD(TVS4,TVS1,TVS2)
+         CALL LUBKSB(TMS1,M,MAXM,INDX,TVS2)
+         CALL VNEG(TVS2)
+         CALL IVXFER(TVS2,J1,W)
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE FLUX OUT BOTTOM OF ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+      FLUXM = 0.0D0
+      DO L = 1,NLINE
+         DO K = 1,MU
+            JMX = MX * L + ML * (K - 1)
+            U0UWT = U0(JMX) * UWT(JMX)
+            SUM = 0.0D0
+            DO KK = JMX - MX + 1, JMX
+               SUM = SUM + TVS2(KK) * XWT(KK)
+            END DO
+            FLUXM = FLUXM + SUM * U0UWT
+         END DO
+      END DO
+      DO IABS = 1,NABS
+         ADD = 0.0D0
+         DO L = 1,NLINE
+            IAL = IABS * L
+            IF(IABS .EQ. 1) THEN
+              XL(L) = 0.0D0
+              DO K = 1,MU
+                 JMX = MX * L + ML * (K - 1)
+                 SUM = 0.0D0
+                 DO KK = JMX - MX + 1, JMX
+                    SUM = SUM + TVS2(KK) * XWT(KK)
+                 END DO
+                 XL(L) = XL(L) + SUM * UWT(JMX)
+              END DO
+            END IF
+            ADD = ADD + XL(L) * AB0(IAL,NL)
+         END DO
+         SA(IABS,NL) = ADD
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C BACKWARD SUBSTITUTE TO OBTAIN J AND H, BUT STORE SCATTERING
+C INTEGRAL IN `SF' FOR USE IN FINAL SOURCE FUNCTION
+C********1*********2*********3*********4*********5*********6*********7**
+      CALL MXFER(C0,NL,TMS1)
+      CALL MVMULT(TMS1,TVS2,TVS3)
+      CALL IVXFER(TVS3,NL,SF)
+      DO JJ = 1,NL1
+         J = NL - JJ
+         CALL MXFER(U,J,TMS1)
+         CALL VXFER(T,J,TVS1)
+         CALL MVMULT(TMS1,TVS2,TVS3)
+         CALL VADD(TVS3,TVS1,TVS2)
+         CALL MXFER(V,J,TMS1)
+         CALL VXFER(W,J,TVS1)
+         CALL MVMULT(TMS1,TVS2,TVS3)
+         CALL VADD(TVS3,TVS1,TVS2)
+         CALL MXFER(C0,J,TMS1)
+         CALL MVMULT(TMS1,TVS2,TVS3)
+         CALL IVXFER(TVS3,J,SF)
+         DO IABS = 1,NABS
+            ADD = 0.0D0
+            DO L = 1,NLINE
+               IAL = IABS * L
+               IF(IABS .EQ. 1) THEN
+                 XL(L) = 0.0D0
+                 DO K = 1,MU
+                    JMX = MX * L + ML * (K - 1)
+                    SUM = 0.0D0
+                    DO KK = JMX - MX + 1, JMX
+                       SUM = SUM + TVS2(KK) * XWT(KK)
+                    END DO
+                    XL(L) = XL(L) + SUM * UWT(JMX)
+                 END DO
+               END IF
+               ADD = ADD + XL(L) * AB0(IAL,J)
+            END DO
+            SA(IABS,J) = ADD
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE FLUX OUT TOP OF ATMOSPHERE
+C********1*********2*********3*********4*********5*********6*********7**
+      FLUXP = 0.0D0
+      DO L = 1,NLINE
+         DO K = 1,MU
+            JMX = MX * L + ML * (K - 1)
+            U0UWT = U0(JMX) * UWT(JMX)
+            SUM = 0.0D0
+            DO KK = JMX - MX + 1, JMX
+               SUM = SUM + TVS2(KK) * XWT(KK)
+            END DO
+            FLUXP = FLUXP + SUM * U0UWT
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C GET FINAL SOURCE FUNCTION BY ADDING INITIAL SOURCE FUNCTION `SI'
+C TO SCATTERING INTEGRAL `SF', AND STORE IN `SF'.
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 1,NL
+         DO J = 1,M
+            SF(J,I) = SF(J,I) + SI(J,I)
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C SAVE INITIAL AND FINAL SOURCE FUNCTIONS FOR LATER RUNS
+C********1*********2*********3*********4*********5*********6*********7**
+      IF(ISOR .EQ. 0) THEN
+        DO I = 1,NL
+           WRITE (20) SNGL(Z(I))
+           DO J = 1,ML
+              WRITE (20) SNGL(SI(J,I)),SNGL(SF(J,I)),SNGL(EXT(J,I))
+           END DO
+        END DO
+      END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C INTEGRATE OVER INITIAL & FINAL SOURCE FUNCTIONS BY WAVELENGTH
+C********1*********2*********3*********4*********5*********6*********7**
+      DO I = 1,NL
+         CALL VXFER(SF,I,TVS1)
+         CALL VXFER(SI,I,TVS2)
+         DO L = 1,NLINE
+            ADD1 = 0.0D0
+            ADD2 = 0.0D0
+            DO K = 1,MU
+               JMX = MX * L + ML * (K - 1)
+               SUM1 = 0.0D0
+               SUM2 = 0.0D0
+               DO KK = JMX - MX + 1,JMX
+                  SUM1 = SUM1 + TVS1(KK) * XWT(KK)
+                  SUM2 = SUM2 + TVS2(KK) * xWT(KK)
+               END DO
+               ADD1 = ADD1 + SUM1 * UWT(JMX)
+               ADD2 = ADD2 + SUM2 * UWT(JMX)
+
+            END DO
+            SOR1(L,I) = ADD1
+            SOR2(L,I) = ADD2
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT INTEGRATED INITIAL AND FINAL SOURCE FUNCTIONS
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (19,10) NLINE
+   10 FORMAT(/3X,'(N)',9X,'Z(CM)',7X,'TOTAL & INITIAL SOURCE',
+     & ' (L =   1 TO L =',I3,')'/)
+      DO I = 1,NL
+         WRITE (19,20) I,Z(I),(SOR1(L,I),SOR2(L,I), L = 1,NLINE)
+      END DO
+   20 FORMAT(2X,I3,2X,1P1E10.3,2X,1P6E10.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT INTEGRATED ABSORPTION SOURCE FUNCTIONS
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (19,30) NABS
+   30 FORMAT(/3X,'(N)',9X,'Z(CM)',7X,'ABSORPTION SOURCE',
+     & ' (IABS =   1 TO IABS =',I3,')'/)
+      DO I = 1,NL
+         WRITE (19,40) I,Z(I),(SA(IABS,I), IABS = 1,NABS)
+      END DO
+   40 FORMAT(2X,I3,2X,1P1E10.3,2X,1P3E10.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT FULL INITIAL AND FINAL SOURCE FUNCTIONS
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,50) MX,NLINE,MU
+   50 FORMAT(//3X,'(N)',4X,'Z(CM)',16X,'INITIAL SOURCE',
+     &        ' (((X =  1 TO X =',I3,') L =  1 TO L =',I3,
+
+     &        ') U = 1 TO U =',I3,')'/)
+      DO I = 1,NL,NTIME
+         WRITE (15,80) I,Z(I),(SI(J,I), J = 1,ML)
+      END DO
+      WRITE (15,60) MX,NLINE,MU
+   60 FORMAT(//3X,'(N)',4X,'Z(CM)',16X,'FINAL SOURCE',
+     &        ' (((X =  1 TO X =',I3,') L =  1 TO L =',I3,
+     &        ') U = 1 TO U =',I3,')'/)
+      DO I = 1,NL,NTIME
+         WRITE (15,80) I,Z(I),(SF(J,I), J = 1,ML)
+      END DO
+   80 FORMAT(2X,I3,2X,1P1E10.3,13X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/
+     &       30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3)
+C********1*********2*********3*********4*********5*********6*********7**
+C OUTPUT THE DIFFUSE FLUX OUT THE TOP AND BOTTOM OF THE ATMOSPHERE
+C (USEFUL FOR CHECKING PHOTON CONSERVATION WHEN ABSORPTION IS ZERO
+C AND SINGLE-SCATTERING ALBEDO IS UNITY).
+C********1*********2*********3*********4*********5*********6*********7**
+      WRITE (15,90) FLUXP,FLUXM
+   90 FORMAT(/1X,'TOTAL FLUX OUT OF ATMOSPHERE (UP & DOWN) =',
+     &        1P1E10.3,2X,1P1E10.3)
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE ANGLE
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C THIS SUBROUTINE USES THE FINAL SOURCE FUNCTION CALCULATED BY THE
+C SUBROUTINE `SOLVE' AS INPUT TO DERIVE ZENITH ANGLE SCANS AT USER-
+C SPECIFIED ALTITUDES BY THE FORMAL SOLUTION TO THE RADIATIVE TRANSFER
+C EQUATION. THE SPHERICITY OF THE ATMOSPHERE IS TAKEN INTO ACCOUNT.
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /SCAN/ XAS(72,5,25),RA(600,5),ANGS(400),ZANGS(5),
+     &              NANGS,NZANGS
+      COMMON /FORM/ XIS(72,99,25),ANG(400),FOV(25),
+     &              WFOV(25),RD(9,99),FIELD,THETA,R0,
+     &              NFOV,NATM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      COMMON /INTENS/ SF(72,99),SI(72,99),SA(3,99)
+      DIMENSION ZG(400),SG(400),TAUS(400),EXTG(400),XINT(72)
+      DIMENSION SH(72),N0Z(5)
+      RT = Z(1) + R0
+      RT2 = RT * RT
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE THE FINAL SOURCE FUNCTION SCALE HEIGHT AT THE
+C UPPER BOUNDARY OF THE ATMOSPHERE, FOR EACH WAVELENGTH AND TRANSITION
+C********1*********2*********3*********4*********5*********6*********7**
+      DO J = 1,M
+         SFJ2 = SF(J,2)
+         SFJ1 = SF(J,1)
+         IF(SFJ2 .LT. SFJ1 .OR. SFJ2 .LE. 0.0D0) THEN
+           SH(J) = 1.0D10
+         ELSE IF(SFJ1 .LE. 0.0D0) THEN
+           SH(J) = (Z(1) - Z(2)) / 1.0D1
+         ELSE
+           SH(J) = (Z(1) - Z(2)) / LOG(SFJ2 / SFJ1)
+         END IF
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C LOCATE THE ALTITUDES OF THE REQUESTED ZENITH ANGLE SCANS IN THE
+C STANDARD ALTITUDE GRID
+C********1*********2*********3*********4*********5*********6*********7**
+      DO IN0 = 1,NZANGS
+         IF(ZANGS(IN0) .GE. Z(1) .OR. ZANGS(IN0) .LE. Z(NL))
+     &     STOP ' ZANGS OUTSIDE BOUNDARIES OF ATMOSPHERE'
+         K = 1
+         DO WHILE(Z(K) .GE. ZANGS(IN0))
+            K = K + 1
+         END DO
+         N0Z(IN0) = K - 1
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C LOOP OVER ZENITH ANGLES (TYPICALLY 0 TO 180 DEGREES, IN 1 DEGREE
+C INCREMENTS)
+C********1*********2*********3*********4*********5*********6*********7**
+      DO IS = 1,NANGS
+C********1*********2*********3*********4*********5*********6*********7**
+C LOOP OVER FIELD-OF-VIEW (THE INTEGRATION OVER THE FIELD-OF-VIEW
+C IS ESTIMATED BY AVERAGING NFOV LINES-OF-SIGHT DISTRIBUTED EVENLY
+C IN ZENITH ANGLE INSIDE THE FIELD-OF-VIEW AND CENTERED ON THE 
+C NOMINAL LINE-OF-SIGHT)
+C********1*********2*********3*********4*********5*********6*********7**
+         DO IFOV = 1,NFOV
+            ANG0 = ANGS(IS) + FOV(IFOV)
+            COSDA = COSD(ANG0)
+C********1*********2*********3*********4*********5*********6*********7**
+C LOOP OVER REQUESTED ALTITUDES
+C********1*********2*********3*********4*********5*********6*********7**
+            DO NA0 = 1,NZANGS
+               ZN0 = ZANGS(NA0)
+               N0 = N0Z(NA0)
+               N01 = N0 + 1
+               RNG = ZN0 + R0
+               RL = RNG * SIND(ANG0)
+               RL2 = RL * RL
+               USUN1 = SQRT(1.0D0 - RL2 / RT2)
+               S0 = RNG * COSDA
+C********1*********2*********3*********4*********5*********6*********7**
+C ANG0 .LE. 90 => UPWARD LOOKING
+C********1*********2*********3*********4*********5*********6*********7**
+               IF(ANG0 .LE. 90.0D0) THEN
+                 NG = N0 + 1
+C********1*********2*********3*********4*********5*********6*********7**
+C ZG STORES THE DISTANCE ALONG THE LINE-OF-SIGHT
+C********1*********2*********3*********4*********5*********6*********7**
+                 ZG(1) = 0.0D0
+                 DO I = 1,N0
+                    II = N0 - I + 2
+                    ZR2 = (Z(I) + R0) ** 2
+                    ZG(II) = SQRT(ZR2 - RL2) - S0
+                 END DO
+                 ZEX = (ZN0 - Z(N01)) / (Z(N0) - Z(N01))
+                 DO J = 1,ML
+C********1*********2*********3*********4*********5*********6*********7**
+C EXTG STORES THE EXTINCTION ALONG THE LINE-OF-SIGHT
+C SG STORES THE SOURCE FUNCTION ALONG THE LINE-OF-SIGHT
+C********1*********2*********3*********4*********5*********6*********7**
+                    EXTG(1) = XINTRJI(EXT,Z,ZN0,N0,J,MAXNL,MAXM)
+                    SZ1 = SF(J,N01)
+                    SZ2 = SF(J,N0)
+                    IF(SZ1 .GT. 1.0D-20 .AND. SZ2 .GT. 1.0D-20) THEN
+                      SG(1) = SZ1 * (SZ2 / SZ1) ** ZEX
+                    ELSE
+                      SG(1) = (SZ2 - SZ1) * ZEX + SZ1
+                    END IF
+                    DO I = 1,N0
+                       II = N0 - I + 2
+                       EXTG(II) = EXT(J,I)
+                       SG(II) = SF(J,I)
+                    END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE OPTICAL DEPTH (TAUS) ALONG LINE-OF-SIGHT BY SPLINE
+C INTEGRATION OF EXTG OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                    CALL INTEGE(ZG,EXTG,TAUS,NG)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE INTENSITY AT Z(N0) IN DIRECTION ANG0 BY SPLINE
+C INTEGRATION OF SG * EXP(-TAUS) OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                    CALL INTEGS(ZG,TAUS,SG,NG,ADDI)
+C********1*********2*********3*********4*********5*********6*********7**
+C IF Z(N0) IS OPTICALLY THICK, USE I = S / KEXT RATHER THAN INTEGRAL
+C RESULT IF THE DISCRETIZATION IS CRUDE
+C********1*********2*********3*********4*********5*********6*********7**
+                    IF(EXTG(1) .GT. 0.0D0) THEN
+                      XLOCAL = SG(1) / EXTG(1)
+                    ELSE
+                      XLOCAL = 0.0D0
+                    END IF
+                    IF(ABS(ADDI) .GT. XLOCAL .AND.
+     &                 TAUS(2) .GT. 5.0D0) ADDI = XLOCAL
+                    XINT(J) = ADDI
+                 END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW ADD ON THE CONTRIBUTION FROM OUTSIDE THE ATMOSPHERE, USING THE
+C SCALE HEIGHT FOR THE FINAL SOURCE FUNCTION WITH A CHAPMAN FUNCTION
+C APPROXIMATION TO THE INTEGRAL OF THE SOURCE FUNCTION.
+C********1*********2*********3*********4*********5*********6*********7**
+                 IF(NATM .LT. 2) THEN
+                   DO J = 1,ML
+                      XP = RT / SH(J)
+                      YP = SQRT(XP / 2.0D0)
+                      SF1 = SF(J,1)
+                      XADP = SF1 * SH(J) * YP * SQPI *
+     &                       EXERFC(YP * USUN1)
+                      XINT(J) = XINT(J) + XADP * EXP(-TAUS(NG))
+                   END DO
+                 END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C ANG0 .GT. 90 => DOWNWARD LOOKING (WE MUST WORRY ABOUT WHETHER OR NOT
+C THE LINE-OF-SIGHT IS OCCULTED BY THE PLANET OR GOES BACK OUT THROUGH
+C THE ATMOSPHERE)
+C********1*********2*********3*********4*********5*********6*********7**
+               ELSE IF(ANG0 .GT. 90.0D0) THEN
+                 ZL = RNG * SIND(ANG0) - R0
+                 KK = N0
+                 DO WHILE (Z(KK) .GT. ZL .AND. KK .LE. NL)
+                    NZL = KK
+                    KK = KK + 1
+                 END DO
+                 NZL2 = NZL - N0 + 2
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NZL = NL, THEN THE LINE-OF-SIGHT HITS THE BOTTOM OF THE
+C ATMOSPHERE, OTHERWISE, THE LINE-OF-SIGHT HAS A TANGENT ALTITUDE
+C WITHIN THE ATMOSPHERE AND CONTINUES BACK UP THROUGH THE ATMOSPHERE
+C AND OUT THE TOP
+C********1*********2*********3*********4*********5*********6*********7**
+                 IF(NZL .NE. NL) THEN
+                   NG = 2 * NZL - N0 + 2
+                 ELSE
+                   NG = NL - N0 + 1
+                 END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C ZG STORES THE DISTANCE ALONG THE LINE-OF-SIGHT
+C********1*********2*********3*********4*********5*********6*********7**
+                 ZG(1) = 0.0D0
+                 IF(NZL .GT. N0) THEN
+                   DO I = N01,NZL
+                      II = I - N0 + 1
+                      ZR2 = (Z(I) + R0) ** 2
+                      ZG(II) = -SQRT(ZR2 - RL2) - S0
+                   END DO
+                 END IF
+                 IF(NZL .NE. NL) THEN
+                   DO I = 1,NZL
+                      II = NG - I + 1
+                      ZR2 = (Z(I) + R0) ** 2
+                      ZG(II) = SQRT(ZR2 - RL2) - S0
+                   END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C ADD AN EXTRA POINT AT THE TANGENT POINT
+C********1*********2*********3*********4*********5*********6*********7**
+                   ZG(NZL2) = -S0
+                 END IF
+                 DO J = 1,ML
+C********1*********2*********3*********4*********5*********6*********7**
+C EXTG STORES THE EXTINCTION ALONG THE LINE-OF-SIGHT
+C SG STORES THE SOURCE FUNCTION ALONG THE LINE-OF-SIGHT 
+C********1*********2*********3*********4*********5*********6*********7**
+                    ZEX = (ZN0 - Z(N01)) / (Z(N0) - Z(N01))
+                    EXTG(1) = XINTRJI(EXT,Z,ZN0,N0,J,MAXNL,MAXM)
+                    SZ1 = SF(J,N01)
+                    SZ2 = SF(J,N0)
+                    IF(SZ1 .GT. 1.0D-20 .AND. SZ2 .GT. 1.0D-20) THEN
+                      SG(1) = SZ1 * (SZ2 / SZ1) ** ZEX
+                    ELSE
+                      SG(1) = (SZ2 - SZ1) * ZEX + SZ1
+                    END IF
+                    IF(NZL .GT. N0) THEN
+                      DO I = N01,NZL
+                         II = I - N0 + 1
+                         EXTG(II) = EXT(J,I)
+                         SG(II) = SF(J,I)
+                      END DO
+                    END IF
+                    IF(NZL .NE. NL) THEN
+                      DO I = 1,NZL
+                         II = NG - I + 1
+                         EXTG(II) = EXT(J,I)
+                         SG(II) = SF(J,I)
+                      END DO
+                      ZEX = (ZL - Z(NZL + 1)) / (Z(NZL) - Z(NZL + 1))
+                      EXTG(NZL2) = XINTRJI(EXT,Z,ZL,NZL,J,MAXNL,MAXM)
+                      SZ1 = SF(J,NZL + 1)
+                      SZ2 = SF(J,NZL)
+                      IF(SZ1 .GT. 1.0D-20 .AND. SZ2 .GT. 1.0D-20) THEN
+                        SG(NZL2) = SZ1 * (SZ2 / SZ1) ** ZEX
+                      ELSE
+                        SG(NZL2) = (SZ2 - SZ1) * ZEX + SZ1
+                      END IF
+                    END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE OPTICAL DEPTH (TAUS) ALONG LINE-OF-SIGHT BY SPLINE
+C INTEGRATION OF EXTG OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                    CALL INTEGE(ZG,EXTG,TAUS,NG)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE INTENSITY AT Z(N0) IN DIRECTION ANG0 BY SPLINE
+C INTEGRATION OF SG * EXP(-TAUS) OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                    CALL INTEGS(ZG,TAUS,SG,NG,ADDI)
+C********1*********2*********3*********4*********5*********6*********7**
+C IF Z(N0) IS OPTICALLY THICK, USE I = S / KEXT RATHER THAN INTEGRAL
+C RESULT IF THE DISCRETIZATION IS CRUDE
+C********1*********2*********3*********4*********5*********6*********7**
+                    IF(EXTG(1) .GT. 0.0D0) THEN
+                      XLOCAL = SG(1) / EXTG(1)
+                    ELSE
+                      XLOCAL = 0.0D0
+                    END IF
+                    IF(ABS(ADDI) .GT. XLOCAL .AND.
+     &                 TAUS(2) .GT. 5.0D0) ADDI = XLOCAL
+                    XINT(J) = ADDI
+                 END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW ADD ON THE CONTRIBUTION FROM OUTSIDE THE ATMOSPHERE, USING THE
+C SCALE HEIGHT FOR THE FINAL SOURCE FUNCTION WITH A CHAPMAN FUNCTION
+C APPROXIMATION TO THE INTEGRAL OF THE SOURCE FUNCTION.
+C********1*********2*********3*********4*********5*********6*********7**
+                 IF(NATM .LT. 2 .AND. NZL .NE. NL) THEN
+                   DO J = 1,ML
+                      XP = RT / SH(J)
+                      YP = SQRT(XP / 2.0D0)
+                      SF1 = SF(J,1)
+                      XADP = SF1 * SH(J) * YP * SQPI *
+     &                       EXERFC(YP * USUN1)
+                      XINT(J) = XINT(J) + XADP * EXP(-TAUS(NG))
+                   END DO
+                 END IF
+               END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C STORE CALCULATED INTENSITIES FOR AVERAGING OVER FIELD-OF-VIEW
+C********1*********2*********3*********4*********5*********6*********7**
+               DO J = 1,ML
+                  XAS(J,NA0,IFOV) = XINT(J)
+               END DO
+            END DO
+         END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW OUTPUT RESULTS
+C********1*********2*********3*********4*********5*********6*********7**
+         DO L = 1,NLINE
+            LS = (IS - 1) * NLINE + L
+            J1 = (L - 1) * MX + 1
+            J2 = L * MX
+            IF(MOD(IS - 1,NTIME) .EQ. 0) THEN
+              WRITE (15,10) ANGS(IS),L,FIELD
+   10         FORMAT(//8X,'ZENITH ANGLE = ',0PF5.1,8X,'LINE = ',I3,
+     &               8X,'FIELD OF VIEW = ',F5.1,' DEGREES')
+              WRITE (15,20) MX
+   20         FORMAT(//3X,'(N)',4X,'Z(CM)',3X,'I(Z) TOTAL',3X,'I(Z)',
+     &               ' (MX=  1 TO MX=',I3,')'/)
+            END IF
+            DO I = 1,NZANGS
+               DO J = 1,ML
+                  XINT(J) = 0.0D0
+               END DO
+               DO J = 1,ML
+C********1*********2*********3*********4*********5*********6*********7**
+C AVERAGE OVER FIELD-OF-VIEW
+C********1*********2*********3*********4*********5*********6*********7**
+                  DO IFOV = 1,NFOV
+                     XINT(J) = XINT(J) + XAS(J,I,IFOV) * WFOV(IFOV)
+                  END DO
+               END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C INTEGRATE OVER LINE PROFILE
+C********1*********2*********3*********4*********5*********6*********7**
+               SUM = 0.0D0
+               DO KK = J1, J2
+                  SUM = SUM + XINT(KK) * XWT(KK)
+               END DO
+               RA(LS,I) = SUM
+               IF(MOD(IS - 1,NTIME) .EQ. 0)
+     &           WRITE (15,30) I,ZANGS(I),SUM,(XINT(J), J = J1,J2)
+            END DO
+         END DO
+      END DO
+   30 FORMAT(2X,I3,2X,1P1E10.3,1X,1P1E10.3,2X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X)
+      DO I = 1,NZANGS
+         WRITE (19,40) ZANGS(I),NLINE,FIELD
+   40    FORMAT(/3X,'AT Z(CM) = ',1PE10.3//3X,'(N)',4X,'Z.A.',3X,
+     &          'I(Z.A.) TOTAL (L=  1 TO L=',I3,'), FOV = ',
+     &          F5.1,' DEG'/)
+         DO IS = 1,NANGS
+            LS1 = (IS - 1) * NLINE + 1
+            LS2 = IS * NLINE
+            WRITE (19,50) IS,ANGS(IS),(RA(LS,I), LS = LS1,LS2)
+         END DO
+      END DO
+   50 FORMAT(2X,I3,2X,1P1E10.3,2X,1P3E10.3)
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      DOUBLE PRECISION FUNCTION XINTRJI(Y,X,X0,I,J,MI,MJ)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      DIMENSION Y(MJ,MI),X(MI)
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERPOLATES A 2D ARRAY EXPONENTIALLY IN THE SECOND INDEX
+C********1*********2*********3*********4*********5*********6*********7**
+      FR = (X0 - X(I + 1)) / (X(I) - X(I + 1))
+      Y1 = Y(J,I + 1)
+      Y2 = Y(J,I)
+      IF(Y1 .GT. 1.0D-20 .AND. Y2 .GT. 1.0D-20) THEN
+        XINTRJI = Y1 * (Y2 / Y1) ** FR
+      ELSE
+        XINTRJI = (Y2 - Y1) * FR + Y1
+      END IF
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE FORMAL
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C THIS SUBROUTINE USES THE FINAL SOURCE FUNCTION CALCULATED BY THE
+C SUBROUTINE `SOLVE' AS INPUT TO DERIVE INTENSITIES IN USER-REQUESTED
+C DIRECTIONS BY THE FORMAL SOLUTION TO THE RADIATIVE TRANSFER EQUATION.
+C THE SPHERICITY OF THE ATMOSPHERE IS TAKEN INTO ACCOUNT.
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /FORM/ XIS(72,99,25),ANG(400),FOV(25),
+     &              WFOV(25),RD(9,99),FIELD,THETA,R0,
+     &              NFOV,NATM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      COMMON /INTENS/ SF(72,99),SI(72,99),SA(3,99)
+      DIMENSION SH(72)
+      DIMENSION ZG(400),SG(400),TAUS(400),EXTG(400),XINT(72)
+      RT = Z(1) + R0
+      RT2 = RT * RT
+      USUNIU = USUN(IU)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE THE FINAL SOURCE FUNCTION SCALE HEIGHT AT THE
+C UPPER BOUNDARY OF THE ATMOSPHERE, FOR EACH WAVELENGTH AND TRANSITION
+C********1*********2*********3*********4*********5*********6*********7**
+      DO J = 1,M
+         SFJ2 = SF(J,2)
+         SFJ1 = SF(J,1)
+         IF(SFJ2 .LT. SFJ1 .OR. SFJ2 .LE. 0.0D0) THEN
+           SH(J) = 1.0D10
+         ELSE IF(SFJ1 .LE. 0.0D0) THEN
+           SH(J) = (Z(1) - Z(2)) / 1.0D1
+         ELSE
+           SH(J) = (Z(1) - Z(2)) / LOG(SFJ2 / SFJ1)
+         END IF
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C LOOP OVER FIELD-OF-VIEW (THE INTEGRATION OVER THE FIELD-OF-VIEW
+C IS ESTIMATED BY AVERAGING NFOV LINES-OF-SIGHT DISTRIBUTED EVENLY
+C IN ZENITH ANGLE INSIDE THE FIELD-OF-VIEW AND CENTERED ON THE 
+C NOMINAL LINE-OF-SIGHT)
+C********1*********2*********3*********4*********5*********6*********7**
+      DO IFOV = 1,NFOV
+         ANG0 = ANG(IU) + FOV(IFOV)
+C********1*********2*********3*********4*********5*********6*********7**
+C LOOP OVER ALL ALTITUDES
+C********1*********2*********3*********4*********5*********6*********7**
+         DO N0 = 1,NL
+            RNG = Z(N0) + R0
+            RL = RNG * SIND(ANG0)
+            RL2 = RL * RL
+            USUN1 = SQRT(1.0D0 - RL2 / RT2)
+            S0 = RNG * COSD(ANG0)
+C********1*********2*********3*********4*********5*********6*********7**
+C ANG0 .LE. 90 => UPWARD LOOKING
+C********1*********2*********3*********4*********5*********6*********7**
+            IF(ANG0 .LE. 90.0D0) THEN
+              NG = N0
+              IF(N0 .NE. 1) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C ZG STORES THE DISTANCE ALONG THE LINE-OF-SIGHT
+C********1*********2*********3*********4*********5*********6*********7**
+                DO I = 1,NG
+                   II = NG - I + 1
+                   ZR2 = (Z(I) + R0) ** 2 
+                   ZG(II) = SQRT(ZR2 - RL2) - S0
+                END DO
+                DO J = 1,ML
+C********1*********2*********3*********4*********5*********6*********7**
+C EXTG STORES THE EXTINCTION ALONG THE LINE-OF-SIGHT
+C SG STORES THE SOURCE FUNCTION ALONG THE LINE-OF-SIGHT 
+C********1*********2*********3*********4*********5*********6*********7**
+                   DO I = 1,NG
+                      II = NG - I + 1
+                      EXTG(II) = EXT(J,I)
+                      SG(II) = SF(J,I)
+                   END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE OPTICAL DEPTH (TAUS) ALONG LINE-OF-SIGHT BY SPLINE
+C INTEGRATION OF EXTG OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                   CALL INTEGE(ZG,EXTG,TAUS,NG)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE INTENSITY AT Z(N0) IN DIRECTION ANG0 BY SPLINE
+C INTEGRATION OF SG * EXP(-TAUS) OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                   CALL INTEGS(ZG,TAUS,SG,NG,ADDI)
+C********1*********2*********3*********4*********5*********6*********7**
+C IF Z(N0) IS OPTICALLY THICK, USE I = S / KEXT RATHER THAN INTEGRAL
+C RESULT IF THE DISCRETIZATION IS CRUDE
+C********1*********2*********3*********4*********5*********6*********7**
+                   IF(EXTG(1) .GT. 0.0D0) THEN
+                     XLOCAL = SG(1) / EXTG(1)
+                   ELSE
+                     XLOCAL = 0.0D0
+                   END IF
+                   IF(ABS(ADDI) .GT. XLOCAL .AND.
+     &                TAUS(2) .GT. 5.0D0) ADDI = XLOCAL
+                   XINT(J) = ADDI
+                END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C IF N0 = 1, THEN WE ARE AT THE TOP OF THE ATMOSPHERE, LOOKING UP
+C********1*********2*********3*********4*********5*********6*********7**
+              ELSE
+                DO J = 1,ML
+                   XINT(J) = 0.0D0
+                END DO
+              END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW ADD ON THE CONTRIBUTION FROM OUTSIDE THE ATMOSPHERE, USING THE
+C SCALE HEIGHT FOR THE FINAL SOURCE FUNCTION WITH A CHAPMAN FUNCTION
+C APPROXIMATION TO THE INTEGRAL OF THE SOURCE FUNCTION.
+C********1*********2*********3*********4*********5*********6*********7**
+              IF(NATM .LT. 2) THEN
+                DO J = 1,ML
+                   XP = RT / SH(J)
+                   YP = SQRT(XP / 2.0D0)
+                   X0J = X0(J)
+                   SF1 = SF(J,1)
+                   XADP = SF1 * SH(J) * YP * SQPI *
+     &                    EXERFC(YP * USUN1)
+                   XINT(J) = XINT(J) + XADP * EXP(-TAUS(NG))
+                END DO
+              END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C ANG0 .GT. 90 => DOWNWARD LOOKING (WE MUST WORRY ABOUT WHETHER OR NOT
+C THE LINE-OF-SIGHT IS OCCULTED BY THE PLANET OR GOES BACK OUT THROUGH
+C THE ATMOSPHERE)
+C********1*********2*********3*********4*********5*********6*********7**
+            ELSE IF(ANG0 .GT. 90.0D0) THEN
+              IF(N0 .NE. NL) THEN
+                ZL = RNG * SIND(ANG0) - R0
+                KK = N0
+                DO WHILE (Z(KK) .GT. ZL .AND. KK .LE. NL)
+                   NZL = KK
+                   KK = KK + 1
+                END DO
+                NZL2 = NZL - N0 + 2
+C********1*********2*********3*********4*********5*********6*********7**
+C IF NZL = NL, THEN THE LINE-OF-SIGHT HITS THE BOTTOM OF THE
+C ATMOSPHERE, OTHERWISE, THE LINE-OF-SIGHT HAS A TANGENT ALTITUDE
+C WITHIN THE ATMOSPHERE AND CONTINUES BACK UP THROUGH THE ATMOSPHERE
+C AND OUT THE TOP
+C********1*********2*********3*********4*********5*********6*********7**
+                IF(NZL .NE. NL) THEN
+                  NG = 2 * NZL - N0 + 2
+                ELSE
+                  NG = NL - N0 + 1
+                END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C ZG STORES THE DISTANCE ALONG THE LINE-OF-SIGHT
+C********1*********2*********3*********4*********5*********6*********7**
+                DO I = N0,NZL
+                   II = I - N0 + 1
+                   ZIR = Z(I) + R0
+                   ZR2 = ZIR * ZIR
+                   ZG(II) = -SQRT(ZR2 - RL2) - S0
+                END DO
+                IF(NZL .NE. NL) THEN
+                  DO I = 1,NZL
+                     II = NG - I + 1
+                     ZIR = Z(I) + R0
+                     ZR2 = ZIR * ZIR
+                     ZG(II) = SQRT(ZR2 - RL2) - S0
+                  END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C ADD AN EXTRA POINT AT THE TANGENT POINT
+C********1*********2*********3*********4*********5*********6*********7**
+                  ZG(NZL2) = -S0
+                END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C EXTG STORES THE EXTINCTION ALONG THE LINE-OF-SIGHT
+C SG STORES THE SOURCE FUNCTION ALONG THE LINE-OF-SIGHT 
+C********1*********2*********3*********4*********5*********6*********7**
+                DO J = 1,ML
+                   DO I = N0,NZL
+                      II = I - N0 + 1
+                      EXTG(II) = EXT(J,I)
+                      SG(II) = SF(J,I)
+                   END DO
+                   IF(NZL .NE. NL) THEN
+                     DO I = 1,NZL
+                        II = NG - I + 1
+                        EXTG(II) = EXT(J,I)
+                        SG(II) = SF(J,I)
+                     END DO
+                     ZEX = (ZL - Z(NZL + 1)) / (Z(NZL) - Z(NZL + 1))
+                     EXTG(NZL2) = XINTRJI(EXT,Z,ZL,NZL,J,MAXNL,MAXM)
+                     SZ1 = SF(J,NZL + 1)
+                     SZ2 = SF(J,NZL)
+                     IF(SZ1 .GT. 1.0D-20 .AND. SZ2 .GT. 1.0D-20) THEN
+                       SG(NZL2) = SZ1 * (SZ2 / SZ1) ** ZEX
+                     ELSE
+                       SG(NZL2) = (SZ2 - SZ1) * ZEX + SZ1
+                     END IF
+                   END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE OPTICAL DEPTH (TAUS) ALONG LINE-OF-SIGHT BY SPLINE
+C INTEGRATION OF EXTG OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                   CALL INTEGE(ZG,EXTG,TAUS,NG)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATE INTENSITY AT Z(N0) IN DIRECTION ANG0 BY SPLINE
+C INTEGRATION OF SG * EXP(-TAUS) OVER ZG
+C********1*********2*********3*********4*********5*********6*********7**
+                   CALL INTEGS(ZG,TAUS,SG,NG,ADDI)
+C********1*********2*********3*********4*********5*********6*********7**
+C IF Z(N0) IS OPTICALLY THICK, USE I = S / KEXT RATHER THAN INTEGRAL
+C RESULT IF THE DISCRETIZATION IS CRUDE
+C********1*********2*********3*********4*********5*********6*********7**
+                   IF(EXTG(1) .GT. 0.0D0) THEN
+                     XLOCAL = SG(1) / EXTG(1)
+                   ELSE
+                     XLOCAL = 0.0D0
+                   END IF
+                   IF(ABS(ADDI) .GT. XLOCAL .AND.
+     &                TAUS(2) .GT. 5.0D0) ADDI = XLOCAL
+                   XINT(J) = ADDI
+                END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C IF N0 = 1, THEN WE ARE AT THE TOP OF THE ATMOSPHERE, LOOKING UP
+C********1*********2*********3*********4*********5*********6*********7**
+              ELSE
+                DO J = 1,ML
+                   XINT(J) = 0.0D0
+                END DO
+              END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW ADD ON THE CONTRIBUTION FROM OUTSIDE THE ATMOSPHERE, USING THE
+C SCALE HEIGHT FOR THE FINAL SOURCE FUNCTION WITH A CHAPMAN FUNCTION
+C APPROXIMATION TO THE INTEGRAL OF THE SOURCE FUNCTION.
+C********1*********2*********3*********4*********5*********6*********7**
+              IF(NATM .LT. 2 .AND. NZL .NE. NL .AND. N0 .NE. NL) THEN
+                DO J = 1,ML
+                   X0J = X0(J)
+                   XP = RT / SH(J)
+                   YP = SQRT(XP / 2.0D0)
+                   SF1 = SF(J,1)
+                   XADP = SF1 * SH(J) * YP * SQPI *
+     &                    EXERFC(YP * USUN1)
+                   XINT(J) = XINT(J) + XADP * EXP(-TAUS(NG))
+                END DO
+              END IF
+            END IF
+C********1*********2*********3*********4*********5*********6*********7**
+C STORE CALCULATED INTENSITIES FOR AVERAGING OVER FIELD-OF-VIEW
+C********1*********2*********3*********4*********5*********6*********7**
+            DO J = 1,ML
+               XIS(J,N0,IFOV) = XINT(J)
+            END DO
+         END DO
+      END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C NOW OUTPUT RESULTS
+C********1*********2*********3*********4*********5*********6*********7**
+      DO L = 1,NLINE
+         J1 = (L - 1) * MX + 1
+         J2 = L * MX
+         WRITE (15,10) ANG(IU),L,FIELD
+   10    FORMAT(//8X,'ZENITH ANGLE = ',F5.1,8X,'LINE = ',I3,
+     &          8X,'FIELD OF VIEW = ',F5.1,' DEGREES')
+         WRITE (15,20) MX
+   20    FORMAT(//3X,'(N)',4X,'Z(CM)',3X,'I(Z) TOTAL',3X,'I(Z)',
+     &          ' (MX=  1 TO MX=',I3,')'/)
+         DO I = 1,NL
+            DO J = 1,ML
+               XINT(J) = 0.0D0
+            END DO
+            DO J = 1,ML
+C********1*********2*********3*********4*********5*********6*********7**
+C AVERAGE OVER FIELD-OF-VIEW
+C********1*********2*********3*********4*********5*********6*********7**
+               DO IFOV = 1,NFOV
+                  XINT(J) = XINT(J) + XIS(J,I,IFOV) * WFOV(IFOV)
+               END DO
+            END DO
+C********1*********2*********3*********4*********5*********6*********7**
+C INTEGRATE OVER LINE PROFILE
+C********1*********2*********3*********4*********5*********6*********7**
+            SUM = 0.0D0
+            DO KK = J1, J2
+               SUM = SUM + XINT(KK) * XWT(KK)
+            END DO
+            RD(L,I) = SUM
+            IF(MOD(I - 1,NTIME) .EQ. 0)
+     &        WRITE (15,30) I,Z(I),SUM,(XINT(J), J = J1,J2)
+         END DO
+      END DO
+   30 FORMAT(2X,I3,2X,1P1E10.3,1X,1P1E10.3,2X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X/30X,1P6E10.3,1X/30X,
+     &       1P6E10.3,1X/30X,1P6E10.3,1X)
+      WRITE (19,40) ANG(IU),USUN(IU)
+   40 FORMAT(' ZENITH ANGLE = ',0P3F8.2,
+     &       ' COS SOLAR ZENITH ANGLE = ',F8.2)
+      DO I = 1,NL
+         WRITE (19,50) I,Z(I)/1.0D5,(RD(L,I)/1.0D6, L = 1,NLINE)
+      END DO
+   50 FORMAT(2X,I3,2X,1P1E10.3,2X,1P6E10.3)
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE TAUSUN
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CALCULATES THE EFFECTIVE COSINE (SOLAR ZENITH ANGLE), EITHER SETTING
+C IT EVERYWHERE TO USUN (ISUN = 0 OR DOWNLOOKING) OR CALCULATING THE
+C ACTUAL OPTICAL DEPTH ALONG THE LINE-OF-SIGHT TO THE SUN FOR EACH
+C ALTITUDE, WAVELENGTH, AND LINE COMPONENT, THEN DIVIDING THE RESULT
+C INTO THE NORMAL OPTICAL DEPTH FOR EACH ALTITUDE, WAVELENGTH, AND
+C LINE COMPONENT.
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      COMMON /FORM/ XIS(72,99,25),ANG(400),FOV(25),
+     &              WFOV(25),RD(9,99),FIELD,THETA,R0,
+     &              NFOV,NATM
+      COMMON /ATPAR/ Z(99),EXT(72,99),TAU(72,99),S(72,99),USEFF(72,99),
+     &               SC0(72,99),AB0(12,99),FT(99),A(99),F(72),FTS(99),
+     &               AS(99),E1(72),PIZ(72),USUN(400),
+     &               XMAX,XMID,PI,SQPI,KIND,NTIME
+      COMMON /INP/ B(72),U0(72),X0(72),UWT(72),XWT(72),MU,MX,ITMX,
+     &             ML,NLINE,MUL,IXS,IU,NSUN,ISUN,ISOR
+      DIMENSION ZG(400),EXTG(400)
+      IF(ISUN .EQ. 0 .OR. ANG(IU) .EQ. 0.0D0 .OR.
+     &   ANG(IU) .EQ. 180.0D0) THEN
+C********1*********2*********3*********4*********5*********6*********7**
+C SET USEFF = USUN EVERYWHERE
+C********1*********2*********3*********4*********5*********6*********7**
+        DO I = 1,NL
+           DO J = 1,M
+              USEFF(J,I) = USUN(IU)
+           END DO
+        END DO
+      ELSE
+C********1*********2*********3*********4*********5*********6*********7**
+C SET USEFF = TAU(NORMAL) / TAU(TOWARDS SUN)
+C********1*********2*********3*********4*********5*********6*********7**
+        RB = Z(NL) + R0
+        RT = Z(1) + R0
+        RT2 = RT * RT
+        CTHS = USUN(IU)
+        STHS = SQRT(1.0D0 - USUN(IU) * USUN(IU))
+        CPH = COSD(THETA)
+        ANG0 = ANG(IU)
+        RTAN = SIND(ANG0) * RT
+        IF(RTAN .LT. RB) THEN
+          STH = RTAN / RB
+          CTH = SQRT(1.0D0 - STH * STH)
+          IF(ANG0 .GT. 90.0D0) CTH = -CTH
+          THE = ASIND(STH)
+          IF(STHS .EQ. 0.0D0) THEN
+            CPHI = 0.0D0
+          ELSE
+            CPHI = (CPH - CTH * CTHS) / STH / STHS 
+          END IF
+        ELSE
+          STH = 1.0D0
+          CTH = 0.0D0
+          THE = 90.0D0
+          IF(STHS .EQ. 0.0D0) THEN
+            CPHI = 0.0D0
+          ELSE
+            CPHI = CPH / STHS
+          END IF
+          IF(RTAN .EQ. RT) THEN
+            RTAN = RB
+          ELSE
+            RB = RTAN
+          END IF
+        END IF
+        DO N0 = 1,NL
+           RNG = Z(N0) + R0
+           IF(ISUN .EQ. 1 .OR. RNG .LT. RTAN) THEN
+             USUN0 = CTHS
+           ELSE
+             STH1 = STH * RB / RNG
+             CTH1 = SQRT(1.0D0 - STH1 * STH1)
+             THE1 = ASIND(STH1)
+             IF(ANG0 .GT. 90.0D0) THEN
+               CDEL = COSD(THE1 - THE)
+               SDEL = SIND(THE1 - THE)
+               USUN0 = CTHS * CDEL - STHS * SDEL * CPHI
+             ELSE
+               CDEL = COSD(THE - THE1)
+               SDEL = SIND(THE - THE1)
+               USUN0 = CTHS * CDEL - STHS * SDEL * CPHI
+             END IF
+           END IF
+           SANG = SQRT(1.0D0 - USUN0 * USUN0)
+           RL2 = (RNG * SANG) ** 2
+           S0 = RNG * USUN0
+           USUN1 = SQRT(1.0D0 - RL2 / RT2)
+           IF(USUN0 .GE. 0.0D0) THEN
+             DO I = 1,N0
+                II = N0 - I + 1
+                ZG(II) = SQRT((Z(I) + R0) ** 2 - RL2) - S0
+             END DO
+             DO J = 1,M
+                H = TAU(J,1) / EXT(J,1)
+                XP = (Z(1) + R0) / H
+                YP = SQRT(XP / 2.0D0)
+                TAU1 = TAU(J,1) * YP * SQPI * EXERFC(YP * ABS(USUN1))
+                IF(N0 .GT. 1) THEN
+                  DO I = 1,N0
+                     II = N0 - I + 1
+                     EXTG(II) = EXT(J,I)
+                  END DO
+                  CALL INTEG(ZG,EXTG,N0,TAUS)
+                  TAU1 = TAU1 + TAUS
+                END IF
+                USEFF(J,N0) = TAU(J,N0) / TAU1
+             END DO
+           ELSE IF(USUN0 .LT. 0.0D0) THEN
+             ZL = RNG * SANG - R0
+             KK = N0
+             DO WHILE (Z(KK) .GT. ZL .AND. KK .LE. NL)
+                NZL = KK
+                KK = KK + 1
+             END DO
+             NZL2 = NZL - N0 + 2
+             IF(NZL .NE. NL) THEN
+               NG = 2 * NZL - N0 + 2
+               DO I = N0,NZL
+                  II = I - N0 + 1
+                  ZG(II) = -SQRT((Z(I) + R0) ** 2 - RL2) - S0
+               END DO
+               DO I = 1,NZL
+                  II = NG - I + 1
+                  ZG(II) = SQRT((Z(I) + R0) ** 2 - RL2) - S0
+               END DO
+               ZG(NZL2) = -S0
+               DO J = 1,M
+                  H = TAU(J,1) / EXT(J,1)
+                  XP = (Z(1) + R0) / H
+                  YP = SQRT(XP / 2.0D0)
+                  TAU1 = TAU(J,1) * YP * SQPI * EXERFC(YP * ABS(USUN1))
+                  DO I = N0,NZL
+                     II = I - N0 + 1
+                     EXTG(II) = EXT(J,I)
+                  END DO
+                  DO I = 1,NZL
+                     II = NG - I + 1
+                     EXTG(II) = EXT(J,I)
+                  END DO
+                  EXTG(NZL2) = XINTRJI(EXT,Z,ZL,NZL,J,MAXNL,MAXM)
+                  CALL INTEG(ZG,EXTG,NG,TAUS)
+                  TAU1 = TAU1 + TAUS
+                  USEFF(J,N0) = TAU(J,N0) / TAU1
+               END DO
+             ELSE
+               DO J = 1,M
+                  USEFF(J,N0) = 1.0D-10
+               END DO
+             END IF
+           END IF
+        END DO
+      END IF
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE SPLINE(N,X,Y,B,C,D)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CUBIC SPLINE ROUTINE FROM FORSYTHE, MALCOLM, AND MOLER, P. 77.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(N),Y(N),B(N),C(N),D(N)
+      NM1 = N - 1
+      IF(N .GE. 2) THEN
+        IF(N .GE. 3) THEN
+          D(1) = X(2) - X(1)
+          C(2) = (Y(2) - Y(1)) / D(1)
+          DO I = 2,NM1
+             D(I) = X(I + 1) - X(I)
+             B(I) = 2.0D0 * (D(I - 1) + D(I))
+             C(I + 1) = (Y(I + 1) - Y(I)) / D(I)
+             C(I) = C(I + 1) - C(I)
+          END DO
+          B(1) = -D(1)
+          B(N) = -D(N - 1)
+          C(1) = 0.0D0
+          C(N) = 0.0D0
+          IF(N .GT. 3) THEN
+            C(1) = C(3) / (X(4) - X(2)) - C(2) / (X(3) - X(1))
+            C(N) = C(N - 1) / (X(N) - X(N - 2)) - C(N - 2) /
+     &             (X(N - 1) - X(N - 3))
+            C(1) =  C(1) * D(1) ** 2 / (X(4) - X(1))
+            C(N) = -C(N) * D(N - 1) ** 2 / (X(N) - X(N - 3))
+          END IF
+          DO I = 2,N
+             T = D(I - 1) / B(I - 1)
+             B(I) = B(I) - T * D(I - 1)
+             C(I) = C(I) - T * C(I - 1)
+          END DO
+          C(N) = C(N) / B(N)
+          DO I = NM1,1,-1
+             C(I) = (C(I) - D(I) * C(I + 1)) / B(I)
+          END DO
+          B(N) = (Y(N) - Y(NM1)) / D(NM1) + D(NM1) * (C(NM1) +
+     &           2.0D0 * C(N))
+          DO I = 1,NM1
+             B(I) = (Y(I + 1) - Y(I)) / D(I) - D(I) *
+     &              (C(I + 1) + 2.0D0 * C(I))
+             D(I) = (C(I + 1) - C(I)) / D(I)
+             C(I) = 3.0D0 * C(I)
+          END DO
+          C(N) = 3.0D0 * C(N)
+          D(N) = D(N - 1)
+        ELSE
+          B(1) = (Y(2) - Y(1)) / (X(2) - X(1))
+          C(1) = 0.0D0
+          D(1) = 0.0D0
+          B(2) = B(1)
+          C(2) = 0.0D0
+          D(2) = 0.0D0
+        ENDIF
+      ENDIF
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      DOUBLE PRECISION FUNCTION SEVAL(N,U,X,Y,B,C,D)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CUBIC SPLINE EVALUATION FUNCTION FROM FORSYTHE, MALCOLM, AND
+C MOLER, P. 79.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(N),Y(N),B(N),C(N),D(N)
+      DATA I/1/
+      IF(SNGL(X(1)) .GT. SNGL(U) .OR. SNGL(X(N)) .LT. SNGL(U)) THEN
+        WRITE (*,'('' ARGUMENT OUT OF RANGE IN SEVAL ''/1X,1P3E26.18)')
+     &        X(1),X(N),U
+        STOP
+      END IF 
+      IF(I .GE. N) I = 1
+      IF(U .LT. X(I)) GO TO 10
+      IF(U .LE. X(I+1)) GO TO 30
+C********1*********2*********3*********4*********5*********6*********7**
+C BINARY SEARCH
+C********1*********2*********3*********4*********5*********6*********7**
+   10 I = 1
+      J = N + 1
+   20 K = (I + J) / 2
+      IF(U .LT. X(K)) J = K
+      IF(U .GE. X(K)) I = K
+      IF(J .GT. I + 1) GO TO 20
+C********1*********2*********3*********4*********5*********6*********7**
+C EVALUATE SPLINE
+C********1*********2*********3*********4*********5*********6*********7**
+   30 DX = U - X(I)
+      SEVAL = Y(I) + DX * (B(I) + DX * (C(I) + DX * D(I)))
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTEGE(X,Y,Z,N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C EVALUATE Z(I) = INTEGRAL FROM X(1) TO X(I) OF Y, ASSUMING THAT Y
+C VARIES EXPONENTIALLY WITH X.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(400),Y(400),Z(400)
+      Z(1) = 0.0D0
+      DO I = 2,N
+         DX = X(I) - X(I - 1)
+         EA = Y(I - 1)
+         EB = Y(I)
+         IF(EA .NE. EB .AND. EA .GT. 1.0D-20 .AND.
+     &      EB .GT. 1.0D-20) THEN
+           Z(I) = Z(I - 1) + DX * (EB - EA) / LOG(EB / EA)
+         ELSE
+           Z(I) = Z(I - 1) + DX * (EB + EA) / 2.0D0
+         END IF
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTEGS(X,Y,Z,N,RESULT)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C EVALUATE RESULT = INTEGRAL FROM X(1) TO X(N) OF Y * Z, ASSUMING THAT Y
+C VARIES EXPONENTIALLY WITH X, WHILE Z IS LINEAR IN X.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(400),Y(400),Z(400)
+      RESULT = 0.0D0
+      DO I = 2,N
+         DX = X(I) - X(I - 1)
+         DY = Y(I) - Y(I - 1)
+         ZA = Z(I - 1)
+         ZB = Z(I)
+         EA = EXP(-Y(I - 1))
+         EB = EXP(-Y(I))
+         IF(DY .GE. 0.1D0 .AND. ZA .GT. 1.0D-20 .AND.
+     &      ZB .GT. 1.0D-20) THEN
+           RESULT = RESULT + DX * (ZA * EA - ZB * EB - (ZA - ZB) *
+     &              (EA - EB) / DY) / DY
+         ELSE
+           RESULT = RESULT + DX * (ZA * EA + ZB * EB) / 2.0D0
+         END IF
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTEG(X,Y,N,RESULT)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C EVALUATE RESULT = INTEGRAL FROM X(1) TO X(N) OF Y,  USING A CUBIC
+C SPLINE FIT TO Y, PLUS THE SPLINE QUADRATURE FORMULA OF FORSYTHE,
+C MALCOLM, AND MOLER, P. 90.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(400),Y(400),B(400),C(400),D(400)
+      CALL SPLINE(N,X,Y,B,C,D)
+      RESULT = 0.0D0
+      DO I = 2,N
+         DX = X(I) - X(I - 1)
+         RESULT = RESULT + DX * ((Y(I) + Y(I - 1)) / 2.0D0 -
+     &                     DX * DX * (C(I) + C(I - 1)) / 12.0D0)
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTERP(XIC,YIC,NC,XIF,YOF,NF)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERPOLATES YIC (ON XIC GRID) ONTO YOF (ON XIF GRID) USING CUBIC
+C SPLINE, ASSUMING YIC VARIES LINEARLY WITH XIC.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION XIC(NC),YIC(NC),XIF(NF),YOF(NF),B(400),C(400),D(400)
+      CALL SPLINE(NC,XIC,YIC,B,C,D)
+      DO I = 1,NF
+         XN = XIF(I)
+         IF(XN .GE. XIC(1) * 0.9999 .AND.
+     &      XN .LE. XIC(NC) * 1.0001) THEN
+           YOF(I) = SEVAL(NC,XN,XIC,YIC,B,C,D)
+         ELSE
+           YOF(I) = 1.0D-30
+         END IF
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTERPL(XIC,YIC,NC,XIF,YOF,NF)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERPOLATES YIC (ON XIC GRID) ONTO YOF (ON XIF GRID) USING CUBIC
+C SPLINE, ASSUMING YIC VARIES LOGARITHMICALLY WITH XIC.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION XIC(NC),YIC(NC),XIF(NF),YOF(NF),B(400),C(400),D(400)
+      DIMENSION YL(400)
+      DO I = 1,NC
+         IF(YIC(I) .EQ. 0.0D0) YIC(I) = 1.0D-30
+         YL(I) = LOG(YIC(I))
+      END DO
+      CALL SPLINE(NC,XIC,YL,B,C,D)
+      DO I = 1,NF
+         XN = XIF(I)
+         IF(XN .GE. XIC(1) * 0.9999 .AND.
+     &      XN .LE. XIC(NC) * 1.0001) THEN
+           YOF(I) = EXP(SEVAL(NC,XN,XIC,YL,B,C,D))
+         ELSE
+           YOF(I) = 1.0D-30
+         END IF
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE REVORD(X,N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C REVERSES THE ORDER OF AN ARRAY
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(N)
+      N2 = N / 2
+      DO I = 1,N2
+         J = N + 1 - I
+         XX = X(I)
+         X(I) = X(J)
+         X(J) = XX
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE INTERPLA(XIC,YIC,NC,XIF,YOF,NF,NA,MN,MQ,MA)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C INTERPOLATES A 2D ARRAY YIC IN THE FIRST DIMENSION (ON XIC GRID) ONTO
+C 2D ARRAY YOF IN THE FIRST DIMENSION (ON XIF GRID), FOR EACH VALUE OF
+C THE SECOND DIMENSION, USING CUBIC SPLINES, ASSUMING YIC VARIES
+C LOGARITHMICALLY WITH XIC.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION XIC(MQ),YIC(MQ,MA),XIF(MN),YOF(MN,MA)
+      DIMENSION YL(400),B(400),C(400),D(400)
+      DO IA = 1,NA
+         DO I = 1,NC
+            IF(YIC(I,IA) .EQ. 0.0D0) YIC(I,IA) = 1.0D-30
+            YL(I) = LOG(YIC(I,IA))
+         END DO
+         CALL SPLINE(NC,XIC,YL,B,C,D)
+         DO I = 1,NF
+            XN = XIF(I)
+            IF(XN .GE. XIC(1) * 0.9999 .AND.
+     &         XN .LE. XIC(NC) * 1.0001) THEN
+              YOF(I,IA) = EXP(SEVAL(NC,XN,XIC,YL,B,C,D))
+            ELSE
+              YOF(I,IA) = 1.0D-30
+            END IF
+         END DO
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE REVORDA(X,N,NA,MN,MA)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C REVERSES THE ORDER OF THE FIRST DIMENSION OF A 2D ARRAY
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(MN,MA)
+      N2 = N / 2
+      DO IA = 1,NA
+         DO I = 1,N2
+            J = N + 1 - I
+            XX = X(I,IA)
+            X(I,IA) = X(J,IA)
+            X(J,IA) = XX
+         END DO
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      DOUBLE PRECISION FUNCTION VOIG1(FREQ,A)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C FAST VOIGT PROFILE FUNCTION
+C REFERENCE; HUI ET AL., JQSRT, 19, 509-516, 1978
+C********1*********2*********3*********4*********5*********6*********7**
+      COMPLEX*16 ZH,F,G1,G2
+      DATA A0/1.22607931777104326D2/,A1/2.14382388694706425D2/
+      DATA A2/1.81928533092181549D2/,A3/9.3155580458138441D1/
+      DATA A4/3.0180142196210589D1/,A5/5.912626209773153D0/
+      DATA A6/5.64189583562615D-1/
+      DATA B0/1.22607931773875350D2/,B1/3.52730625110963558D2/
+      DATA B2/4.57334478783897737D2/,B3/3.48703917719495792D2/
+      DATA B4/1.70354001821091472D2/,B5/5.3992906912940207D1/
+      DATA B6/1.0479857114260399D1/
+C********1*********2*********3*********4*********5*********6*********7**
+C USE FOR REAL FREQ & A
+C********1*********2*********3*********4*********5*********6*********7**
+      X = ABS(FREQ)
+      IF(A .GE. 1.0D-5) THEN
+        X = MIN(X,1.0D2)
+        ZH = DCMPLX(A,-X)
+        G1 = ((((A6 * ZH + A5) * ZH + A4) * ZH + A3) * ZH + A2)
+        G2 = (((((ZH + B6) * ZH + B5) * ZH + B4) * ZH + B3) * ZH + B2)
+        F = ((G1 * ZH + A1) * ZH + A0) / ((G2 * ZH + B1) * ZH + B0)
+        VOIG1 = DREAL(F)
+        IF(X .EQ. 1.0D2) VOIG1 = VOIG1 * 1.0D4 / (FREQ * FREQ)
+      ELSE
+        IF(X .LT. 1.8D0) THEN
+           XSQ = 3.24D0
+        ELSE
+           XSQ = X * X
+        END IF
+        VOIG1 = EXP(-X * X) + A / 1.772453851D0 / XSQ *
+     &         (1.0D0 + 1.5D0 / XSQ * (1.0D0 + 2.5D0 / XSQ))
+      END IF 
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE GAULEG(X1,X2,X,W,N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C NUMERICAL RECIPES `GAULEG' SUBROUTINE P. 125, USED FOR CALCULATING
+C GAUSSIAN WEIGHTS AND PIVOTS.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION X(N),W(N)
+      PARAMETER (EPS = 3.0D-14)
+      M = (N + 1) / 2
+      XM = 0.5D0 * (X2 + X1)
+      XL = 0.5D0 * (X2 - X1)
+      DO 30 I = 1,M
+         Z = COS(3.1415926535897932D0 * (I - 0.25D0) / (N + 0.5D0))
+10       CONTINUE
+         P1 = 1.0D0
+         P2 = 0.0D0
+         DO 20 J = 1,N
+            P3 = P2
+            P2 = P1
+            P1 = ((2.0D0 * J - 1.0D0) * Z * P2 - (J - 1.0D0) * P3) / J
+20       CONTINUE
+         PP = N * (Z * P1 - P2) / (Z * Z - 1.0D0)
+         Z1 = Z
+         Z = Z1 - P1 / PP
+         IF (ABS(Z - Z1) .GT. EPS) GO TO 10
+         X(I) = XM - XL * Z
+         X(N + 1 - I) = XM + XL * Z
+         W(I) = 2.0D0 * XL / ((1.0D0 - Z * Z) * PP * PP)
+         W(N + 1 - I) = W(I)
+30    CONTINUE
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE MXFER(MAT1,L,MAT2)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C TRANSFERS LTH LEVEL OF A 3D STORAGE ARRAY INTO A 2D ARRAY 
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 MAT2(MAXM,MAXM)
+      REAL*4 MAT1(MAXM,MAXM,MAXNL)
+      DO J = 1,M
+         DO I = 1,M
+            MAT2(I,J) = DBLE(MAT1(I,J,L))
+         END DO
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE VXFER(V1,L,V2)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C TRANSFERS LTH LEVEL OF A 2D STORAGE ARRAY INTO A 1D ARRAY 
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 V1(MAXM,MAXNL),V2(MAXM)
+      DO I = 1,M
+         V2(I) = V1(I,L)
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE IMXFER(MAT2,L,MAT1)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C TRANSFERS A 2D ARRAY INTO THE LTH LEVEL OF A 3D STORAGE ARRAY
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 MAT2(MAXM,MAXM)
+      REAL*4 MAT1(MAXM,MAXM,MAXNL)
+      DO J = 1,M
+         DO I = 1,M
+            MAT1(I,J,L) = SNGL(MAT2(I,J))
+         END DO
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE IVXFER(V2,L,V1)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C TRANSFERS A 1D ARRAY INTO THE LTH LEVEL OF A 2D STORAGE ARRAY
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 V1(MAXM,MAXNL),V2(MAXM)
+      DO I = 1,M
+         V1(I,L) = V2(I)
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE MADD(M1,M2,M3)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C ADDS TWO FULL MATRICES
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 M1(MAXM,MAXM),M2(MAXM,MAXM),M3(MAXM,MAXM)
+      DO J = 1,M
+         DO I = 1,M
+            M3(I,J) = M1(I,J) + M2(I,J)
+         END DO
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE DMADD(D1,M2,M3)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C ADDS A DIAGONAL MATRIX TO A FULL MATRIX
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 D1(MAXM),M2(MAXM,MAXM),M3(MAXM,MAXM)
+      DO J = 1,M
+         DO I = 1,M
+            M3(I,J) = M2(I,J)
+         END DO
+         M3(J,J) = M3(J,J) + D1(J)
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE MVMULT(M1,V1,V2)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C MULTIPLIES A FULL MATRIX TIMES A VECTOR
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 M1(MAXM,MAXM),V1(MAXM),V2(MAXM)
+      DO I = 1,M
+         SUM = 0.0D0
+         DO J = 1,M
+            SUM = SUM + M1(I,J) * V1(J)
+         END DO
+         V2(I) = SUM
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE VADD(V1,V2,V3)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C ADDS TWO VECTORS
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 V1(MAXM),V2(MAXM),V3(MAXM)
+      DO I = 1,M
+         V3(I) = V1(I) + V2(I)
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE DMMLT(D1,M1,M2,F)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C MULTIPLIES A DIAGONAL MATRIX TIMES A FULL MATRIX TIMES A SCALE FACTOR
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 M1(MAXM,MAXM),D1(MAXM),M2(MAXM,MAXM)
+      DO I = 1,M
+         DO J = 1,M
+            M2(J,I) = M1(J,I) * D1(J) * F
+         END DO
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE DVMLT(D1,V1,V2,F)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C MULTIPLIES A DIAGONAL MATRIX TIMES A VECTOR TIMES A SCALE FACTOR
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 V1(MAXM),D1(MAXM),V2(MAXM)
+      DO I = 1,M
+         V2(I) = V1(I) * D1(I) * F
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE VNEG(V1)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C CHANGES THE SIGN OF A VECTOR
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 V1(MAXM)
+      DO I = 1,M
+         V1(I) = -V1(I)
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE LUDCMP(A,N,NP,INDX)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C LOWER / UPPER DECOMPOSITION ROUTINE FROM NUMERICAL RECIPES, P. 35.
+C********1*********2*********3*********4*********5*********6*********7**
+      PARAMETER (NMAX = 1000, TINY = 1.0D-20)
+      DIMENSION A(NP,NP),INDX(N),VV(NMAX)
+      D = 1.0D0
+      DO 20 I = 1,N
+         AAMAX = 0.0D0
+         DO 10 J = 1,N
+            AAMAX = MAX(AAMAX,ABS(A(I,J)))
+   10    CONTINUE
+         IF(AAMAX .EQ. 0.0D0) PAUSE 'Singular matrix.'
+         VV(I) = 1.0D0 / AAMAX
+   20 CONTINUE
+      DO 90 J = 1,N
+         DO 40 I = 1,J - 1
+            SUM = A(I,J)
+            DO 30 K = 1,I - 1
+               SUM = SUM - A(I,K) * A(K,J)
+   30       CONTINUE
+            A(I,J) = SUM
+   40    CONTINUE
+         AAMAX = 0.0D0
+         DO 60 I = J,N
+            SUM = A(I,J)
+            DO 50 K = 1,J - 1
+               SUM = SUM - A(I,K) * A(K,J)
+   50       CONTINUE
+            A(I,J) = SUM
+            DUM = VV(I) * ABS(SUM)
+            IF(DUM .GE. AAMAX) THEN
+              IMAX = I
+              AAMAX = DUM
+            END IF
+   60    CONTINUE
+         IF(J .NE. IMAX) THEN
+           DO 70 K = 1,N
+              DUM = A(IMAX,K)
+              A(IMAX,K) = A(J,K)
+              A(J,K) = DUM
+   70      CONTINUE
+           D = -D
+           VV(IMAX) = VV(J)
+         END IF
+         INDX(J) = IMAX
+         IF(J .NE. N) THEN
+           IF(A(J,J) .EQ. 0.0D0) A(J,J) = TINY
+             DUM = 1.0D0 / A(J,J)
+             DO 80 I = J + 1,N
+                A(I,J) = A(I,J) * DUM
+   80        CONTINUE
+           END IF
+   90 CONTINUE
+      IF(A(N,N) .EQ. 0.0D0) A(N,N) = TINY
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE LUBKSB(A,N,NP,INDX,B)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C FORWARD / BACKWARD SUBSTITUTION ROUTINE FROM NUMERICAL RECIPES, P. 36.
+C********1*********2*********3*********4*********5*********6*********7**
+      DIMENSION A(NP,NP),INDX(N),B(N)
+      II = 0
+      DO 20 I = 1,N
+         LL = INDX(I)
+         SUM = B(LL)
+         B(LL) = B(I)
+         IF(II .NE. 0) THEN
+           DO 10 J = II,I - 1
+              SUM = SUM - A(I,J) * B(J)
+   10      CONTINUE
+         ELSE IF(SUM .NE. 0.0D0) THEN
+           II = I
+         END IF
+         B(I) = SUM
+   20 CONTINUE
+      DO 40 I = N,1,-1
+         SUM = B(I)
+         DO 30 J = I + 1,N
+            SUM = SUM - A(I,J) * B(J)
+   30    CONTINUE
+         B(I) = SUM / A(I,I)
+   40 CONTINUE
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
+      SUBROUTINE MDMLT(M1,D1,M2,INDX,F)
+      IMPLICIT REAL*8 (A-H,O-Z)
+C********1*********2*********3*********4*********5*********6*********7**
+C MULTIPLIES THE INVERSE OF A FULL MATRIX TIMES A DIAGONAL MATRIX TIMES
+C A SCALE FACTOR.
+C********1*********2*********3*********4*********5*********6*********7**
+      COMMON /DIMEN/ NL,NL1,M,MAXNL,MAXM
+      REAL*8 M1(MAXM,MAXM),D1(MAXM),M2(MAXM,MAXM)
+      DIMENSION INDX(MAXM)
+      DO I = 1,M
+         DO J = 1,M
+            M2(J,I) = 0.0D0
+         END DO
+         M2(I,I) = D1(I) * F
+      END DO
+      DO J = 1,M
+         CALL LUBKSB(M1,M,MAXM,INDX,M2(1,J))
+      END DO
+      RETURN
+      END
+C********1*********2*********3*********4*********5*********6*********7**
